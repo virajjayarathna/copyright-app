@@ -3,6 +3,7 @@ const { App } = require("@octokit/app");
 const { createNodeMiddleware } = require("@octokit/app");
 const { getInstallationOctokit } = require("./githubClient");
 const { addCopyrightToFile, supportedExtensions } = require("./addCopyright");
+const http = require("http");
 
 // Debug environment variables
 console.log("APP_ID:", process.env.APP_ID);
@@ -150,13 +151,33 @@ app.webhooks.on("push", async ({ payload }) => {
   }
 });
 
+// Custom middleware to handle GET requests for health check
+const customMiddleware = (req, res) => {
+  if (req.method === "GET" && req.url === "/" || req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`
+      <html>
+        <head><title>Copyright App Status</title></head>
+        <body>
+          <h1>Copyright App is running</h1>
+          <p>Server is up and ready to process GitHub webhooks.</p>
+          <p>Deployed on: ${new Date().toISOString()}</p>
+        </body>
+      </html>
+    `);
+  } else {
+    // Pass to Octokit middleware for webhook handling
+    return createNodeMiddleware(app)(req, res);
+  }
+};
+
 // Export for Vercel/local testing
-module.exports = createNodeMiddleware(app);
+module.exports = customMiddleware;
 
 // Start server locally if run directly
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  require("http").createServer(createNodeMiddleware(app)).listen(PORT, () => {
+  http.createServer(customMiddleware).listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
