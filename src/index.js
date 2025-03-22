@@ -28,9 +28,11 @@ app.webhooks.onAny(({ id, name, payload }) => {
   console.log("Payload:", JSON.stringify(payload, null, 2));
 });
 
-// Log webhook errors
-app.webhooks.onError(({ error }) => {
+// Log webhook errors with more detail
+app.webhooks.onError(({ error, request }) => {
   console.error("Webhook error:", error.message, error.stack);
+  console.log("Request headers:", JSON.stringify(request.headers, null, 2));
+  console.log("Request body:", request.body);
 });
 
 app.webhooks.on("push", async ({ payload }) => {
