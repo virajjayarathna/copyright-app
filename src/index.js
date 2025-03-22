@@ -4,6 +4,7 @@ const { createNodeMiddleware } = require("@octokit/app");
 const { getInstallationOctokit } = require("./githubClient");
 const { addCopyrightToFile, supportedExtensions } = require("./addCopyright");
 const http = require("http");
+const { Webhooks } = require("@octokit/webhooks");
 
 // Debug environment variables
 console.log("APP_ID:", process.env.APP_ID);
@@ -19,6 +20,11 @@ const app = new App({
   oauth: { clientId: undefined, clientSecret: undefined },
 });
 
+// Webhooks instance for manual validation
+const webhooks = new Webhooks({
+  secret: process.env.WEBHOOK_SECRET,
+});
+
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} [YourCompanyName]. All Rights Reserved. {{DATE}}";
 
@@ -28,7 +34,7 @@ app.webhooks.onAny(({ id, name, payload }) => {
   console.log("Payload:", JSON.stringify(payload, null, 2));
 });
 
-// Log webhook errors with more detail
+// Log webhook errors
 app.webhooks.onError(({ error, request }) => {
   console.error("Webhook error:", error.message, error.stack);
   console.log("Request headers:", JSON.stringify(request.headers, null, 2));
@@ -156,8 +162,8 @@ app.webhooks.on("push", async ({ payload }) => {
   }
 });
 
-// Custom middleware with raw request logging
-const customMiddleware = (req, res) => {
+// Custom middleware with manual validation
+const customMiddleware = async (req, res) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
   console.log("Headers:", JSON.stringify(req.headers, null, 2));
 
@@ -165,7 +171,7 @@ const customMiddleware = (req, res) => {
   req.on("data", chunk => {
     body += chunk.toString();
   });
-  req.on("end", () => {
+  req.on("end", async () => {
     console.log("Raw body:", body);
 
     if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
@@ -184,15 +190,48 @@ const customMiddleware = (req, res) => {
       return;
     }
 
-    console.log("Passing to webhook handler");
-    const octokitMiddleware = createNodeMiddleware(app);
-    octokitMiddleware(req, res, () => {
-      if (!res.headersSent) {
-        console.log("No response sent by webhook handler, sending default 200");
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "received" }));
+    // Manual validation
+    const signature256 = req.headers["x-hub-signature-256"];
+    const event = req.headers["x-github-event"];
+    const id = req.headers["x-github-delivery"];
+
+    try {
+      const isValid = await webhooks.verify(body, signature256);
+      console.log("Signature validation result:", isValid);
+
+      if (!isValid) {
+        console.log("Signature invalid, rejecting request");
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid signature" }));
+        return;
       }
-    });
+
+      if (event !== "push") {
+        console.log(`Ignoring non-push event: ${event}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ignored" }));
+        return;
+      }
+
+      const payload = JSON.parse(body);
+      console.log("Manually triggering push event");
+      await app.webhooks.receive({
+        id,
+        name: "push",
+        payload,
+      });
+
+      if (!res.headersSent) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "processed" }));
+      }
+    } catch (error) {
+      console.error("Error in manual validation:", error.message, error.stack);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error" }));
+      }
+    }
   });
 };
 
