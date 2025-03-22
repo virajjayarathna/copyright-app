@@ -1,6 +1,5 @@
 require("dotenv").config();
 const { App } = require("@octokit/app");
-const { createNodeMiddleware } = require("@octokit/app");
 const { getInstallationOctokit } = require("./githubClient");
 const { addCopyrightToFile, supportedExtensions } = require("./addCopyright");
 const http = require("http");
@@ -34,9 +33,9 @@ app.webhooks.onAny(({ id, name, payload }) => {
   console.log("Payload:", JSON.stringify(payload, null, 2));
 });
 
-// Log webhook errors
+// Log webhook errors safely
 app.webhooks.onError(({ error, request }) => {
-  console.error("Webhook error:", error.message, error.stack);
+  console.error("Webhook error:", error.message || error.toString());
   console.log("Request headers:", JSON.stringify(request.headers, null, 2));
   console.log("Request body:", request.body);
 });
@@ -156,7 +155,7 @@ app.webhooks.on("push", async ({ payload }) => {
     console.log(`Successfully added copyright to ${repoOwner}/${repoName}`);
     console.timeEnd("handlePushEvent");
   } catch (error) {
-    console.error("Error processing push event:", error.message, error.stack);
+    console.error("Error processing push event:", error.message || error.toString());
     console.timeEnd("handlePushEvent");
     throw error;
   }
@@ -190,7 +189,6 @@ const customMiddleware = async (req, res) => {
       return;
     }
 
-    // Manual validation
     const signature256 = req.headers["x-hub-signature-256"];
     const event = req.headers["x-github-event"];
     const id = req.headers["x-github-delivery"];
@@ -226,7 +224,7 @@ const customMiddleware = async (req, res) => {
         res.end(JSON.stringify({ status: "processed" }));
       }
     } catch (error) {
-      console.error("Error in manual validation:", error.message, error.stack);
+      console.error("Error in manual validation:", error.message || error.toString());
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal server error" }));
