@@ -15,7 +15,7 @@ console.log("GITHUB_TOKEN (first 10 chars):", process.env.GITHUB_TOKEN.substring
 const app = new App({
   appId: process.env.APP_ID,
   privateKey: process.env.PRIVATE_KEY,
-  //webhooks: { secret: process.env.WEBHOOK_SECRET },
+  webhooks: { secret: process.env.WEBHOOK_SECRET },
   oauth: { clientId: undefined, clientSecret: undefined },
 });
 
