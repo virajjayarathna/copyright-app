@@ -1,4 +1,4 @@
-const { Octokit } = require("@octokit/core");
+const { Octokit } = require("@octokit/rest");
 
 async function getInstallationOctokit(app, installationId) {
   const installationToken = await app.octokit.request(
