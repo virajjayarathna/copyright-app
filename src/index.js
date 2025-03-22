@@ -22,7 +22,13 @@ const app = new App({
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} [YourCompanyName]. All Rights Reserved. {{DATE}}";
 
+// Log webhook verification
+app.webhooks.onError(({ error }) => {
+  console.error("Webhook error:", error.message, error.stack);
+});
+
 app.webhooks.on("push", async ({ payload }) => {
+  console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
   console.time("handlePushEvent");
 
@@ -151,9 +157,10 @@ app.webhooks.on("push", async ({ payload }) => {
   }
 });
 
-// Custom middleware with additional logging
+// Custom middleware with explicit response handling
 const customMiddleware = (req, res) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
+
   if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
     console.log("Serving health check page");
     res.writeHead(200, { "Content-Type": "text/html" });
@@ -167,10 +174,19 @@ const customMiddleware = (req, res) => {
         </body>
       </html>
     `);
-  } else {
-    console.log("Passing to webhook handler");
-    return createNodeMiddleware(app)(req, res);
+    return;
   }
+
+  console.log("Passing to webhook handler");
+  const octokitMiddleware = createNodeMiddleware(app);
+  octokitMiddleware(req, res, () => {
+    // Fallback if no response is sent by Octokit
+    if (!res.headersSent) {
+      console.log("No response sent by webhook handler, sending default 200");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "received" }));
+    }
+  });
 };
 
 // Export for Vercel/local testing
@@ -178,7 +194,7 @@ module.exports = customMiddleware;
 
 // Start server locally if run directly
 if (require.main === module) {
-  const PORT = process.env.PORT || 3500; // Updated to 3500
+  const PORT = process.env.PORT || 3500;
   http.createServer(customMiddleware).listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
