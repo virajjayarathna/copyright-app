@@ -22,7 +22,13 @@ const app = new App({
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} [YourCompanyName]. All Rights Reserved. {{DATE}}";
 
-// Log webhook verification
+// Log all webhook events
+app.webhooks.onAny(({ id, name, payload }) => {
+  console.log(`Webhook received: ${name} (ID: ${id})`);
+  console.log("Payload:", JSON.stringify(payload, null, 2));
+});
+
+// Log webhook errors
 app.webhooks.onError(({ error }) => {
   console.error("Webhook error:", error.message, error.stack);
 });
@@ -45,20 +51,6 @@ app.webhooks.on("push", async ({ payload }) => {
   const repoName = repository.name;
 
   try {
-    let copyrightText = defaultCopyrightText;
-    try {
-      const { data } = await octokit.repos.getContent({
-        owner: repoOwner,
-        repo: repoName,
-        path: ".github/copyright.txt",
-        ref: head_commit.id,
-      });
-      copyrightText = Buffer.from(data.content, "base64").toString("utf8");
-      console.log("Using custom copyright text from .github/copyright.txt");
-    } catch (e) {
-      console.log("No custom copyright.txt found, using default.");
-    }
-
     const filesToProcess = new Set();
     commits.forEach(commit => {
       commit.added?.forEach(file => filesToProcess.add(file));
@@ -66,13 +58,18 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     console.log("Files to process:", Array.from(filesToProcess));
 
+    if (filesToProcess.size === 0) {
+      console.log("No files to process, skipping...");
+      console.timeEnd("handlePushEvent");
+      return;
+    }
+
     let changesMade = false;
     const newTree = [];
 
     for (const filePath of filesToProcess) {
-      if (!supportedExtensions.some(ext => filePath.endsWith(ext)) || 
-          [".gitignore", "LICENSE", "README.md"].includes(filePath)) {
-        console.log(`Skipping ${filePath}: Unsupported or excluded`);
+      if (!supportedExtensions.some(ext => filePath.endsWith(ext))) {
+        console.log(`Skipping ${filePath}: Unsupported extension`);
         continue;
       }
 
@@ -87,7 +84,7 @@ app.webhooks.on("push", async ({ payload }) => {
 
       const currentYear = new Date().getFullYear();
       const currentDate = new Date().toISOString().split("T")[0];
-      const formattedCopyright = copyrightText
+      const formattedCopyright = defaultCopyrightText
         .replace("{{YEAR}}", currentYear)
         .replace("{{DATE}}", currentDate);
       const syntax = require("./addCopyright").getCommentSyntax(filePath);
@@ -112,7 +109,7 @@ app.webhooks.on("push", async ({ payload }) => {
 
       newTree.push({
         path: filePath,
-        mode: fileData.mode || "100644",
+        mode: "100644",
         type: "blob",
         sha: blobData.sha,
       });
@@ -148,7 +145,7 @@ app.webhooks.on("push", async ({ payload }) => {
       sha: newCommitData.sha,
     });
 
-    console.log(`Successfully added copyright headers to ${repoOwner}/${repoName}`);
+    console.log(`Successfully added copyright to ${repoOwner}/${repoName}`);
     console.timeEnd("handlePushEvent");
   } catch (error) {
     console.error("Error processing push event:", error.message, error.stack);
@@ -157,35 +154,43 @@ app.webhooks.on("push", async ({ payload }) => {
   }
 });
 
-// Custom middleware with explicit response handling
+// Custom middleware with raw request logging
 const customMiddleware = (req, res) => {
   console.log(`Incoming request: ${req.method} ${req.url}`);
+  console.log("Headers:", JSON.stringify(req.headers, null, 2));
 
-  if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
-    console.log("Serving health check page");
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(`
-      <html>
-        <head><title>Copyright App Status</title></head>
-        <body>
-          <h1>Copyright App is running</h1>
-          <p>Server is up and ready to process GitHub webhooks.</p>
-          <p>Deployed on: ${new Date().toISOString()}</p>
-        </body>
-      </html>
-    `);
-    return;
-  }
+  let body = "";
+  req.on("data", chunk => {
+    body += chunk.toString();
+  });
+  req.on("end", () => {
+    console.log("Raw body:", body);
 
-  console.log("Passing to webhook handler");
-  const octokitMiddleware = createNodeMiddleware(app);
-  octokitMiddleware(req, res, () => {
-    // Fallback if no response is sent by Octokit
-    if (!res.headersSent) {
-      console.log("No response sent by webhook handler, sending default 200");
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "received" }));
+    if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
+      console.log("Serving health check page");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(`
+        <html>
+          <head><title>Copyright App Status</title></head>
+          <body>
+            <h1>Copyright App is running</h1>
+            <p>Server is up and ready to process GitHub webhooks.</p>
+            <p>Deployed on: ${new Date().toISOString()}</p>
+          </body>
+        </html>
+      `);
+      return;
     }
+
+    console.log("Passing to webhook handler");
+    const octokitMiddleware = createNodeMiddleware(app);
+    octokitMiddleware(req, res, () => {
+      if (!res.headersSent) {
+        console.log("No response sent by webhook handler, sending default 200");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "received" }));
+      }
+    });
   });
 };
 
