@@ -57,6 +57,30 @@ app.webhooks.on("push", async ({ payload }) => {
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
 
+  // Fetch copyright.txt and set copyrightText
+  let copyrightText = defaultCopyrightText;
+  try {
+    const { data: copyrightFile } = await octokit.repos.getContent({
+      owner: repoOwner,
+      repo: repoName,
+      path: "copyright.txt",
+      ref: head_commit.id,
+    });
+    if (copyrightFile.type === "file") {
+      copyrightText = Buffer.from(copyrightFile.content, "base64").toString("utf8").trim();
+      console.log("Using custom copyright text from copyright.txt");
+    } else {
+      console.log("copyright.txt is not a file, using default");
+    }
+  } catch (error) {
+    if (error.status === 404) {
+      console.log("copyright.txt not found, using default");
+    } else {
+      console.error("Error fetching copyright.txt:", error.message);
+      // Proceed with default text
+    }
+  }
+
   try {
     const filesToProcess = new Set();
     commits.forEach(commit => {
@@ -91,7 +115,7 @@ app.webhooks.on("push", async ({ payload }) => {
 
       const currentYear = new Date().getFullYear();
       const currentDate = new Date().toISOString().split("T")[0];
-      const formattedCopyright = defaultCopyrightText
+      const formattedCopyright = copyrightText
         .replace("{{YEAR}}", currentYear)
         .replace("{{DATE}}", currentDate);
       const syntax = require("./addCopyright").getCommentSyntax(filePath);
