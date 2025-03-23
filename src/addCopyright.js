@@ -41,4 +41,4 @@ async function addCopyrightToFile(filePath, copyrightText) {
   return true;
 }
 
-module.exports = { addCopyrightToFile, supportedExtensions };
+module.exports = { addCopyrightToFile, supportedExtensions, getCommentSyntax };

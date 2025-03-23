@@ -1,8 +1,9 @@
 require("dotenv").config();
 const { App } = require("@octokit/app");
-const { createNodeMiddleware } = require("@octokit/app");
 const { getInstallationOctokit } = require("./githubClient");
 const { addCopyrightToFile, supportedExtensions } = require("./addCopyright");
+const http = require("http");
+const { Webhooks } = require("@octokit/webhooks");
 
 // Debug environment variables
 console.log("APP_ID:", process.env.APP_ID);
@@ -15,20 +16,38 @@ const app = new App({
   appId: process.env.APP_ID,
   privateKey: process.env.PRIVATE_KEY,
   webhooks: { secret: process.env.WEBHOOK_SECRET },
-  // Explicitly disable OAuth to avoid confusion
   oauth: { clientId: undefined, clientSecret: undefined },
+});
+
+// Webhooks instance for manual validation
+const webhooks = new Webhooks({
+  secret: process.env.WEBHOOK_SECRET,
 });
 
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} [YourCompanyName]. All Rights Reserved. {{DATE}}";
 
+// Log all webhook events
+app.webhooks.onAny(({ id, name, payload }) => {
+  console.log(`Webhook received: ${name} (ID: ${id})`);
+  console.log("Payload:", JSON.stringify(payload, null, 2));
+});
+
+// Log webhook errors safely
+app.webhooks.onError(({ error, request }) => {
+  console.error("Webhook error:", error.message || error.toString());
+  console.log("Request headers:", JSON.stringify(request.headers, null, 2));
+  console.log("Request body:", request.body);
+});
+
 app.webhooks.on("push", async ({ payload }) => {
+  console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
-  
-  const { repository, installation, sender } = payload;
+  console.time("handlePushEvent");
+
+  const { repository, installation, sender, commits, head_commit } = payload;
   const installationId = installation.id;
 
-  // Skip if from bot to avoid infinite loops
   if (sender.login === "copyright-app[bot]") {
     console.log("Push from bot, skipping...");
     return;
@@ -37,126 +56,190 @@ app.webhooks.on("push", async ({ payload }) => {
   const octokit = await getInstallationOctokit(app, installationId);
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
-  const defaultBranch = repository.default_branch;
 
   try {
-    // Get custom copyright text or use default
-    let copyrightText = defaultCopyrightText;
-    try {
-      const { data } = await octokit.repos.getContent({
-        owner: repoOwner,
-        repo: repoName,
-        path: ".github/copyright.txt",
-      });
-      copyrightText = Buffer.from(data.content, "base64").toString("utf8");
-      console.log("Using custom copyright text from .github/copyright.txt");
-    } catch (e) {
-      console.log("No custom copyright.txt found, using default.");
+    const filesToProcess = new Set();
+    commits.forEach(commit => {
+      commit.added?.forEach(file => filesToProcess.add(file));
+      commit.modified?.forEach(file => filesToProcess.add(file));
+    });
+    console.log("Files to process:", Array.from(filesToProcess));
+
+    if (filesToProcess.size === 0) {
+      console.log("No files to process, skipping...");
+      console.timeEnd("handlePushEvent");
+      return;
     }
-
-    // Get the latest commit SHA
-    const { data: refData } = await octokit.git.getRef({
-      owner: repoOwner,
-      repo: repoName,
-      ref: `heads/${defaultBranch}`,
-    });
-    const latestCommitSha = refData.object.sha;
-
-    // Get the tree from the latest commit
-    const { data: commitData } = await octokit.git.getCommit({
-      owner: repoOwner,
-      repo: repoName,
-      commit_sha: latestCommitSha,
-    });
-    const treeSha = commitData.tree.sha;
-
-    // Get all files in the tree
-    const { data: treeData } = await octokit.git.getTree({
-      owner: repoOwner,
-      repo: repoName,
-      tree_sha: treeSha,
-      recursive: true,
-    });
 
     let changesMade = false;
     const newTree = [];
 
-    for (const file of treeData.tree) {
-      if (!file.path || file.type !== "blob" || !supportedExtensions.some(ext => file.path.endsWith(ext))) continue;
-      if ([".gitignore", "LICENSE", "README.md"].includes(file.path)) continue;
+    for (const filePath of filesToProcess) {
+      if (!supportedExtensions.some(ext => filePath.endsWith(ext))) {
+        console.log(`Skipping ${filePath}: Unsupported extension`);
+        continue;
+      }
 
+      console.log("Processing file:", filePath);
       const { data: fileData } = await octokit.repos.getContent({
         owner: repoOwner,
         repo: repoName,
-        path: file.path,
+        path: filePath,
+        ref: head_commit.id,
       });
       let content = Buffer.from(fileData.content, "base64").toString("utf8");
 
       const currentYear = new Date().getFullYear();
       const currentDate = new Date().toISOString().split("T")[0];
-      const formattedCopyright = copyrightText
+      const formattedCopyright = defaultCopyrightText
         .replace("{{YEAR}}", currentYear)
         .replace("{{DATE}}", currentDate);
-      const syntax = require("./addCopyright").getCommentSyntax(file.path);
-      if (!syntax) continue;
+      const syntax = require("./addCopyright").getCommentSyntax(filePath);
+      if (!syntax) {
+        console.log(`Skipping ${filePath}: No comment syntax`);
+        continue;
+      }
 
       const comment = `${syntax.start}${formattedCopyright}${syntax.end}\n\n`;
-      if (content.includes(formattedCopyright)) continue;
+      if (content.includes(formattedCopyright)) {
+        console.log(`Skipping ${filePath}: Copyright already present`);
+        continue;
+      }
 
       content = comment + content;
-      newTree.push({
-        path: file.path,
-        mode: file.mode,
-        type: "blob",
+      const { data: blobData } = await octokit.git.createBlob({
+        owner: repoOwner,
+        repo: repoName,
         content: content,
+        encoding: "utf-8",
+      });
+
+      newTree.push({
+        path: filePath,
+        mode: "100644",
+        type: "blob",
+        sha: blobData.sha,
       });
       changesMade = true;
+      console.log(`Updated ${filePath} with copyright`);
     }
 
     if (!changesMade) {
       console.log("No changes needed.");
+      console.timeEnd("handlePushEvent");
       return;
     }
 
-    // Create a new tree
     const { data: newTreeData } = await octokit.git.createTree({
       owner: repoOwner,
       repo: repoName,
-      base_tree: treeSha,
+      base_tree: head_commit.tree_id,
       tree: newTree,
     });
 
-    // Create a new commit
     const { data: newCommitData } = await octokit.git.createCommit({
       owner: repoOwner,
       repo: repoName,
       message: "chore: add copyright headers [skip ci]",
       tree: newTreeData.sha,
-      parents: [latestCommitSha],
+      parents: [head_commit.id],
     });
 
-    // Update the branch reference
     await octokit.git.updateRef({
       owner: repoOwner,
       repo: repoName,
-      ref: `heads/${defaultBranch}`,
+      ref: `heads/${repository.default_branch}`,
       sha: newCommitData.sha,
     });
 
-    console.log(`Successfully added copyright headers to ${repoOwner}/${repoName}`);
+    console.log(`Successfully added copyright to ${repoOwner}/${repoName}`);
+    console.timeEnd("handlePushEvent");
   } catch (error) {
-    console.error("Error processing push event:", error.message, error.stack);
+    console.error("Error processing push event:", error.message || error.toString());
+    console.timeEnd("handlePushEvent");
     throw error;
   }
 });
 
+// Custom middleware with manual validation
+const customMiddleware = async (req, res) => {
+  console.log(`Incoming request: ${req.method} ${req.url}`);
+  console.log("Headers:", JSON.stringify(req.headers, null, 2));
+
+  let body = "";
+  req.on("data", chunk => {
+    body += chunk.toString();
+  });
+  req.on("end", async () => {
+    console.log("Raw body:", body);
+
+    if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
+      console.log("Serving health check page");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(`
+        <html>
+          <head><title>Copyright App Status</title></head>
+          <body>
+            <h1>Copyright App is running</h1>
+            <p>Server is up and ready to process GitHub webhooks.</p>
+            <p>Deployed on: ${new Date().toISOString()}</p>
+          </body>
+        </html>
+      `);
+      return;
+    }
+
+    const signature256 = req.headers["x-hub-signature-256"];
+    const event = req.headers["x-github-event"];
+    const id = req.headers["x-github-delivery"];
+
+    try {
+      const isValid = await webhooks.verify(body, signature256);
+      console.log("Signature validation result:", isValid);
+
+      if (!isValid) {
+        console.log("Signature invalid, rejecting request");
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid signature" }));
+        return;
+      }
+
+      if (event !== "push") {
+        console.log(`Ignoring non-push event: ${event}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ignored" }));
+        return;
+      }
+
+      const payload = JSON.parse(body);
+      console.log("Manually triggering push event");
+      await app.webhooks.receive({
+        id,
+        name: "push",
+        payload,
+      });
+
+      if (!res.headersSent) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "processed" }));
+      }
+    } catch (error) {
+      console.error("Error in manual validation:", error.message || error.toString());
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error" }));
+      }
+    }
+  });
+};
+
 // Export for Vercel/local testing
-module.exports = createNodeMiddleware(app);
+module.exports = customMiddleware;
 
 // Start server locally if run directly
 if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  require("http").createServer(createNodeMiddleware(app)).listen(PORT, () => {
+  const PORT = process.env.PORT || 3500;
+  http.createServer(customMiddleware).listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
