@@ -211,7 +211,6 @@ app.webhooks.on("push", async ({ payload }) => {
   const { repository, installation, sender, commits, head_commit } = payload;
   const installationId = installation.id;
 
-  // Skip if the push is from the bot itself to avoid loops
   if (sender.login === "copyright-app[bot]") {
     console.log("Push from bot, skipping...");
     return;
@@ -221,61 +220,26 @@ app.webhooks.on("push", async ({ payload }) => {
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
 
+  // Fetch copyright text
+  const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, head_commit.id);
+
   try {
-    // Check if copyright.txt was added or modified in this push
-    const isCopyrightTxtChanged = commits.some(commit =>
-      commit.added?.includes("copyright.txt") || commit.modified?.includes("copyright.txt")
-    );
+    const filesToProcess = new Set();
+    commits.forEach(commit => {
+      commit.added?.forEach(file => filesToProcess.add(file));
+      commit.modified?.forEach(file => filesToProcess.add(file));
+    });
+    console.log("Files to process:", Array.from(filesToProcess));
 
-    let filesToProcess;
-    if (isCopyrightTxtChanged) {
-      console.log("copyright.txt was added or modified, processing all files");
-      // Get the commit data to access the tree
-      const { data: commitData } = await octokit.git.getCommit({
-        owner: repoOwner,
-        repo: repoName,
-        commit_sha: head_commit.id,
-      });
-      const treeSha = commitData.tree.sha;
-
-      // Fetch all files recursively from the repository
-      const { data: treeData } = await octokit.git.getTree({
-        owner: repoOwner,
-        repo: repoName,
-        tree_sha: treeSha,
-        recursive: true,
-      });
-
-      // Filter for supported file extensions
-      filesToProcess = treeData.tree
-        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-        .map(item => item.path);
-    } else {
-      console.log("Processing only added and modified files");
-      // Collect added and modified files from the push
-      filesToProcess = new Set();
-      commits.forEach(commit => {
-        commit.added?.forEach(file => filesToProcess.add(file));
-        commit.modified?.forEach(file => filesToProcess.add(file));
-      });
-      filesToProcess = Array.from(filesToProcess);
-    }
-
-    console.log("Files to process:", filesToProcess);
-
-    if (filesToProcess.length === 0) {
+    if (filesToProcess.size === 0) {
       console.log("No files to process, skipping...");
       console.timeEnd("handlePushEvent");
       return;
     }
 
-    // Fetch the copyright text from the latest commit
-    const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, head_commit.id);
-
     let changesMade = false;
     const newTree = [];
 
-    // Process each file
     for (const filePath of filesToProcess) {
       if (!supportedExtensions.some(ext => filePath.endsWith(ext))) {
         console.log(`Skipping ${filePath}: Unsupported extension`);
@@ -308,7 +272,6 @@ app.webhooks.on("push", async ({ payload }) => {
         continue;
       }
 
-      // Add the copyright comment to the top of the file
       content = comment + content;
       const { data: blobData } = await octokit.git.createBlob({
         owner: repoOwner,
@@ -333,7 +296,6 @@ app.webhooks.on("push", async ({ payload }) => {
       return;
     }
 
-    // Create a new tree with the updated files
     const { data: newTreeData } = await octokit.git.createTree({
       owner: repoOwner,
       repo: repoName,
@@ -341,7 +303,6 @@ app.webhooks.on("push", async ({ payload }) => {
       tree: newTree,
     });
 
-    // Create a new commit
     const { data: newCommitData } = await octokit.git.createCommit({
       owner: repoOwner,
       repo: repoName,
@@ -350,7 +311,6 @@ app.webhooks.on("push", async ({ payload }) => {
       parents: [head_commit.id],
     });
 
-    // Update the branch reference
     await octokit.git.updateRef({
       owner: repoOwner,
       repo: repoName,
