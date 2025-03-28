@@ -132,6 +132,10 @@ app.webhooks.on("installation.created", async ({ payload }) => {
         });
         let content = Buffer.from(fileData.content, "base64").toString("utf8");
 
+        // Get the first 10 lines
+        const lines = content.split("\n");
+        const firstTenLines = lines.slice(0, 10).join("\n");
+
         const currentYear = new Date().getFullYear();
         const currentDate = new Date().toISOString().split("T")[0];
         const formattedCopyright = copyrightText
@@ -144,11 +148,12 @@ app.webhooks.on("installation.created", async ({ payload }) => {
         }
 
         const comment = `${syntax.start}${formattedCopyright}${syntax.end}\n\n`;
-        if (content.includes(formattedCopyright)) {
-          console.log(`Skipping ${filePath}: Copyright already present`);
+        if (firstTenLines.includes(formattedCopyright)) {
+          console.log(`Skipping ${filePath}: Copyright already present in first 10 lines`);
           continue;
         }
 
+        // Add the copyright comment to the top of the file
         content = comment + content;
         const { data: blobData } = await octokit.git.createBlob({
           owner: repoOwner,
@@ -202,7 +207,7 @@ app.webhooks.on("installation.created", async ({ payload }) => {
   console.timeEnd("handleInstallation");
 });
 
-// Handle push events: Check all files on every push
+// Handle push events: Check first 10 lines of all files on every push
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
@@ -269,6 +274,10 @@ app.webhooks.on("push", async ({ payload }) => {
       });
       let content = Buffer.from(fileData.content, "base64").toString("utf8");
 
+      // Get the first 10 lines
+      const lines = content.split("\n");
+      const firstTenLines = lines.slice(0, 10).join("\n");
+
       const currentYear = new Date().getFullYear();
       const currentDate = new Date().toISOString().split("T")[0];
       const formattedCopyright = copyrightText
@@ -281,8 +290,8 @@ app.webhooks.on("push", async ({ payload }) => {
       }
 
       const comment = `${syntax.start}${formattedCopyright}${syntax.end}\n\n`;
-      if (content.startsWith(comment)) {
-        console.log(`Skipping ${filePath}: Copyright already present at the top`);
+      if (firstTenLines.includes(formattedCopyright)) {
+        console.log(`Skipping ${filePath}: Copyright already present in first 10 lines`);
         continue;
       }
 
