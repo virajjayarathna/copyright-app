@@ -440,7 +440,7 @@ const customMiddleware = async (req, res) => {
       }
     }
   });
-});
+};
 
 // Export for Vercel/local testing
 module.exports = customMiddleware;
