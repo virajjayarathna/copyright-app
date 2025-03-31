@@ -58,8 +58,6 @@ app.webhooks.on("installation.created", async ({ payload }) => {
   const creator = sender.login;
 
   const octokit = await getInstallationOctokit(app, installationId);
-
-  try {
     for (const repo of repositories) {
       const repoOwner = repo.owner.login;
       const repoName = repo.name;
@@ -198,11 +196,7 @@ app.webhooks.on("installation.created", async ({ payload }) => {
       console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
     }
     console.timeEnd("handleInstallationEvent");
-  } catch (error) {
-    console.error("Error processing installation event:", error.message || "Unknown error");
-    console.timeEnd("handleInstallationEvent");
-    throw error;
-  }
+  
 });
 
 // Handle push events
