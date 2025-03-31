@@ -388,7 +388,7 @@ const customMiddleware = async (req, res) => {
     body += chunk.toString();
   });
   req.on("end", async () => {
-    console.log("Raw body:", body);
+    //console.log("Raw body:", body);
 
     if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
       console.log("Serving health check page");
