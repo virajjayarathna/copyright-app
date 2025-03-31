@@ -380,8 +380,8 @@ app.webhooks.on("push", async ({ payload }) => {
 
 // Custom middleware with manual validation
 const customMiddleware = async (req, res) => {
-  console.log(`Incoming request: ${req.method} ${req.url}`);
-  console.log("Headers:", JSON.stringify(req.headers, null, 2));
+  //console.log(`Incoming request: ${req.method} ${req.url}`);
+  //console.log("Headers:", JSON.stringify(req.headers, null, 2));
 
   let body = "";
   req.on("data", chunk => {
