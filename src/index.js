@@ -5,7 +5,6 @@ const { getCommentSyntax, supportedExtensions } = require("./addCopyright");
 const http = require("http");
 const { Webhooks } = require("@octokit/webhooks");
 
-
 // Initialize the GitHub App
 const app = new App({
   appId: process.env.APP_ID,
@@ -257,15 +256,20 @@ app.webhooks.on("push", async ({ payload }) => {
         .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
         .map(item => item.path);
     } else {
-      const newFiles = new Set();
+      const filesToCheck = new Set();
       commits.forEach(commit => {
         commit.added?.forEach(file => {
           if (supportedExtensions.some(ext => file.endsWith(ext))) {
-            newFiles.add(file);
+            filesToCheck.add(file);
+          }
+        });
+        commit.modified?.forEach(file => {
+          if (supportedExtensions.some(ext => file.endsWith(ext))) {
+            filesToCheck.add(file);
           }
         });
       });
-      filesToProcess = Array.from(newFiles);
+      filesToProcess = Array.from(filesToCheck);
     }
 
     console.log("Files to process:", filesToProcess);
@@ -380,16 +384,11 @@ app.webhooks.on("push", async ({ payload }) => {
 
 // Custom middleware with manual validation
 const customMiddleware = async (req, res) => {
-  //console.log(`Incoming request: ${req.method} ${req.url}`);
-  //console.log("Headers:", JSON.stringify(req.headers, null, 2));
-
   let body = "";
   req.on("data", chunk => {
     body += chunk.toString();
   });
   req.on("end", async () => {
-    //console.log("Raw body:", body);
-
     if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
       console.log("Serving health check page");
       res.writeHead(200, { "Content-Type": "text/html" });
@@ -441,7 +440,7 @@ const customMiddleware = async (req, res) => {
       }
     }
   });
-};
+});
 
 // Export for Vercel/local testing
 module.exports = customMiddleware;
