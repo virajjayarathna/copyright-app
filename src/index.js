@@ -5,11 +5,6 @@ const { getCommentSyntax, supportedExtensions } = require("./addCopyright");
 const http = require("http");
 const { Webhooks } = require("@octokit/webhooks");
 
-// Debug environment variables
-console.log("APP_ID:", process.env.APP_ID);
-console.log("WEBHOOK_SECRET:", process.env.WEBHOOK_SECRET);
-console.log("PRIVATE_KEY (first 50 chars):", process.env.PRIVATE_KEY.substring(0, 50));
-console.log("GITHUB_TOKEN (first 10 chars):", process.env.GITHUB_TOKEN.substring(0, 10));
 
 // Initialize the GitHub App
 const app = new App({
@@ -25,20 +20,7 @@ const webhooks = new Webhooks({
 });
 
 // Default copyright text
-const defaultCopyrightText = "© {{YEAR}} viraj-m-jay. All Rights Reserved.";
-
-// Log all webhook events
-app.webhooks.onAny(({ id, name, payload }) => {
-  console.log(`Webhook received: ${name} (ID: ${id})`);
-  console.log("Payload:", JSON.stringify(payload, null, 2));
-});
-
-// Log webhook errors safely
-app.webhooks.onError(({ error, request }) => {
-  console.error("Webhook error:", error.message || "Unknown error");
-  console.log("Request headers:", JSON.stringify(request.headers, null, 2));
-  console.log("Request body:", request.body);
-});
+const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
 // Helper function to fetch and format copyright text
 async function getCopyrightText(octokit, repoOwner, repoName, ref) {

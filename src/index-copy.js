@@ -1,7 +1,7 @@
 require("dotenv").config();
 const { App } = require("@octokit/app");
 const { getInstallationOctokit } = require("./githubClient");
-const { addCopyrightToFile, supportedExtensions } = require("./addCopyright");
+const { getCommentSyntax, supportedExtensions } = require("./addCopyright");
 const http = require("http");
 const { Webhooks } = require("@octokit/webhooks");
 
@@ -25,7 +25,7 @@ const webhooks = new Webhooks({
 });
 
 // Default copyright text
-const defaultCopyrightText = "© {{YEAR}} [YourCompanyName]. All Rights Reserved. {{DATE}}";
+const defaultCopyrightText = "© {{YEAR}} viraj-m-jay. All Rights Reserved.";
 
 // Log all webhook events
 app.webhooks.onAny(({ id, name, payload }) => {
@@ -66,16 +66,173 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   return copyrightText;
 }
 
-// Handle push events: Check first 10 lines of all files on every push to any branch
+// Handle installation events: Process all files when app is installed
+app.webhooks.on("installation.created", async ({ payload }) => {
+  console.log("Webhook handler triggered");
+  console.log("Received installation.created event for:", payload.repositories.map(r => r.full_name));
+  console.time("handleInstallationEvent");
+
+  const { installation, sender, repositories } = payload;
+  const installationId = installation.id;
+  const creator = sender.login;
+
+  const octokit = await getInstallationOctokit(app, installationId);
+
+  try {
+    for (const repo of repositories) {
+      const repoOwner = repo.owner.login;
+      const repoName = repo.name;
+
+      // Get the default branch
+      const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
+      const defaultBranch = repoData.default_branch;
+
+      // Get the latest commit SHA of the default branch
+      const { data: refData } = await octokit.git.getRef({
+        owner: repoOwner,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`,
+      });
+      const latestCommitSha = refData.object.sha;
+
+      // Get the commit data to access the tree
+      const { data: commitData } = await octokit.git.getCommit({
+        owner: repoOwner,
+        repo: repoName,
+        commit_sha: latestCommitSha,
+      });
+      const treeSha = commitData.tree.sha;
+
+      // Fetch all files recursively
+      const { data: treeData } = await octokit.git.getTree({
+        owner: repoOwner,
+        repo: repoName,
+        tree_sha: treeSha,
+        recursive: true,
+      });
+
+      const filesToProcess = treeData.tree
+        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
+        .map(item => item.path);
+
+      console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
+
+      if (filesToProcess.length === 0) {
+        console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
+        continue;
+      }
+
+      const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
+      let changesMade = false;
+      const newTree = [];
+      const currentYear = new Date().getFullYear();
+      const currentDate = new Date().toISOString().split("T")[0];
+
+      for (const filePath of filesToProcess) {
+        console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
+        const { data: fileData } = await octokit.repos.getContent({
+          owner: repoOwner,
+          repo: repoName,
+          path: filePath,
+          ref: latestCommitSha,
+        });
+        let content = Buffer.from(fileData.content, "base64").toString("utf8");
+        const lines = content.split("\n");
+        const firstTenLines = lines.slice(0, 10).join("\n");
+
+        if (firstTenLines.includes("Copyright Header")) {
+          console.log(`Skipping ${filePath}: Copyright header already present`);
+          continue;
+        }
+
+        const syntax = getCommentSyntax(filePath);
+        if (!syntax) {
+          console.log(`Skipping ${filePath}: No comment syntax`);
+          continue;
+        }
+
+        const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
+        let fullComment;
+        if (syntax.end) {
+          const prefix = syntax.line ? ` ${syntax.line} ` : '';
+          fullComment = `${syntax.start}\n` +
+                        `${prefix}Copyright Header\n` +
+                        `${prefix}${baseCopyright}\n` +
+                        `${prefix}Created date : ${currentDate}\n` +
+                        `${prefix}Created by : ${creator}\n` +
+                        `${syntax.end}\n\n`;
+        } else {
+          fullComment = `${syntax.start} Copyright Header\n` +
+                        `${syntax.start} ${baseCopyright}\n` +
+                        `${syntax.start} Created date : ${currentDate}\n` +
+                        `${syntax.start} Created by : ${creator}\n\n`;
+        }
+
+        content = fullComment + content;
+        const { data: blobData } = await octokit.git.createBlob({
+          owner: repoOwner,
+          repo: repoName,
+          content: content,
+          encoding: "utf-8",
+        });
+
+        newTree.push({
+          path: filePath,
+          mode: "100644",
+          type: "blob",
+          sha: blobData.sha,
+        });
+        changesMade = true;
+        console.log(`Updated ${filePath} with copyright`);
+      }
+
+      if (!changesMade) {
+        console.log(`No changes needed in ${repoOwner}/${repoName}`);
+        continue;
+      }
+
+      const { data: newTreeData } = await octokit.git.createTree({
+        owner: repoOwner,
+        repo: repoName,
+        base_tree: treeSha,
+        tree: newTree,
+      });
+
+      const { data: newCommitData } = await octokit.git.createCommit({
+        owner: repoOwner,
+        repo: repoName,
+        message: "chore: add copyright headers on installation [skip ci]",
+        tree: newTreeData.sha,
+        parents: [latestCommitSha],
+      });
+
+      await octokit.git.updateRef({
+        owner: repoOwner,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`,
+        sha: newCommitData.sha,
+        force: false,
+      });
+
+      console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
+    }
+    console.timeEnd("handleInstallationEvent");
+  } catch (error) {
+    console.error("Error processing installation event:", error.message || "Unknown error");
+    console.timeEnd("handleInstallationEvent");
+    throw error;
+  }
+});
+
+// Handle push events
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
   console.time("handlePushEvent");
 
-  const { repository, installation, sender, ref, head_commit } = payload;
+  const { repository, installation, sender, ref, commits } = payload;
   const installationId = installation.id;
 
-  // Skip if the push is from the bot itself to avoid loops
   if (sender.login === "copyright-app[bot]") {
     console.log("Push from bot, skipping...");
     return;
@@ -84,10 +241,10 @@ app.webhooks.on("push", async ({ payload }) => {
   const octokit = await getInstallationOctokit(app, installationId);
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
-  const branch = ref.replace("refs/heads/", ""); // Get the branch name from ref
+  const branch = ref.replace("refs/heads/", "");
+  const creator = sender.login;
 
   try {
-    // Get the latest commit SHA of the branch
     const { data: refData } = await octokit.git.getRef({
       owner: repoOwner,
       repo: repoName,
@@ -95,7 +252,6 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const latestCommitSha = refData.object.sha;
 
-    // Get the commit data to access the tree
     const { data: commitData } = await octokit.git.getCommit({
       owner: repoOwner,
       repo: repoName,
@@ -103,34 +259,47 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const treeSha = commitData.tree.sha;
 
-    // Fetch all files recursively from the repository
-    const { data: treeData } = await octokit.git.getTree({
-      owner: repoOwner,
-      repo: repoName,
-      tree_sha: treeSha,
-      recursive: true,
-    });
+    const isCopyrightTxtChanged = commits.some(commit =>
+      commit.added?.includes("copyright.txt") || commit.modified?.includes("copyright.txt")
+    );
 
-    // Filter for supported file extensions
-    const filesToProcess = treeData.tree
-      .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-      .map(item => item.path);
+    let filesToProcess;
+    if (isCopyrightTxtChanged) {
+      const { data: treeData } = await octokit.git.getTree({
+        owner: repoOwner,
+        repo: repoName,
+        tree_sha: treeSha,
+        recursive: true,
+      });
+      filesToProcess = treeData.tree
+        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
+        .map(item => item.path);
+    } else {
+      const newFiles = new Set();
+      commits.forEach(commit => {
+        commit.added?.forEach(file => {
+          if (supportedExtensions.some(ext => file.endsWith(ext))) {
+            newFiles.add(file);
+          }
+        });
+      });
+      filesToProcess = Array.from(newFiles);
+    }
 
     console.log("Files to process:", filesToProcess);
 
     if (filesToProcess.length === 0) {
-      console.log("No supported files to process, skipping...");
+      console.log("No files to process, skipping...");
       console.timeEnd("handlePushEvent");
       return;
     }
 
-    // Fetch the copyright text from the latest commit
     const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
-
     let changesMade = false;
     const newTree = [];
+    const currentYear = new Date().getFullYear();
+    const currentDate = new Date().toISOString().split("T")[0];
 
-    // Process each file
     for (const filePath of filesToProcess) {
       console.log("Processing file:", filePath);
       const { data: fileData } = await octokit.repos.getContent({
@@ -140,30 +309,38 @@ app.webhooks.on("push", async ({ payload }) => {
         ref: latestCommitSha,
       });
       let content = Buffer.from(fileData.content, "base64").toString("utf8");
-
-      // Get the first 10 lines
       const lines = content.split("\n");
       const firstTenLines = lines.slice(0, 10).join("\n");
 
-      const currentYear = new Date().getFullYear();
-      const currentDate = new Date().toISOString().split("T")[0];
-      const formattedCopyright = copyrightText
-        .replace("{{YEAR}}", currentYear)
-        .replace("{{DATE}}", currentDate);
-      const syntax = require("./addCopyright").getCommentSyntax(filePath);
+      if (firstTenLines.includes("Copyright Header")) {
+        console.log(`Skipping ${filePath}: Copyright header already present`);
+        continue;
+      }
+
+      const syntax = getCommentSyntax(filePath);
       if (!syntax) {
         console.log(`Skipping ${filePath}: No comment syntax`);
         continue;
       }
 
-      const comment = `${syntax.start}${formattedCopyright}${syntax.end}\n\n`;
-      if (firstTenLines.includes(formattedCopyright)) {
-        console.log(`Skipping ${filePath}: Copyright already present in first 10 lines`);
-        continue;
+      const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
+      let fullComment;
+      if (syntax.end) {
+        const prefix = syntax.line ? ` ${syntax.line} ` : '';
+        fullComment = `${syntax.start}\n` +
+                      `${prefix}Copyright Header\n` +
+                      `${prefix}${baseCopyright}\n` +
+                      `${prefix}Created date : ${currentDate}\n` +
+                      `${prefix}Created by : ${creator}\n` +
+                      `${syntax.end}\n\n`;
+      } else {
+        fullComment = `${syntax.start} Copyright Header\n` +
+                      `${syntax.start} ${baseCopyright}\n` +
+                      `${syntax.start} Created date : ${currentDate}\n` +
+                      `${syntax.start} Created by : ${creator}\n\n`;
       }
 
-      // Add the copyright comment to the top of the file
-      content = comment + content;
+      content = fullComment + content;
       const { data: blobData } = await octokit.git.createBlob({
         owner: repoOwner,
         repo: repoName,
@@ -187,7 +364,6 @@ app.webhooks.on("push", async ({ payload }) => {
       return;
     }
 
-    // Create a new tree with the updated files
     const { data: newTreeData } = await octokit.git.createTree({
       owner: repoOwner,
       repo: repoName,
@@ -195,7 +371,6 @@ app.webhooks.on("push", async ({ payload }) => {
       tree: newTree,
     });
 
-    // Create a new commit based on the latest commit SHA
     const { data: newCommitData } = await octokit.git.createCommit({
       owner: repoOwner,
       repo: repoName,
@@ -204,13 +379,12 @@ app.webhooks.on("push", async ({ payload }) => {
       parents: [latestCommitSha],
     });
 
-    // Update the branch reference with force option if needed (optional)
     await octokit.git.updateRef({
       owner: repoOwner,
       repo: repoName,
       ref: `heads/${branch}`,
       sha: newCommitData.sha,
-      force: false, // Set to true if you want to force the update (not recommended)
+      force: false,
     });
 
     console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${branch}`);
