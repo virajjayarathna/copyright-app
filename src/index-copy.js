@@ -5,12 +5,6 @@ const { getCommentSyntax, supportedExtensions } = require("./addCopyright");
 const http = require("http");
 const { Webhooks } = require("@octokit/webhooks");
 
-// Debug environment variables
-console.log("APP_ID:", process.env.APP_ID);
-console.log("WEBHOOK_SECRET:", process.env.WEBHOOK_SECRET);
-console.log("PRIVATE_KEY (first 50 chars):", process.env.PRIVATE_KEY.substring(0, 50));
-console.log("GITHUB_TOKEN (first 10 chars):", process.env.GITHUB_TOKEN.substring(0, 10));
-
 // Initialize the GitHub App
 const app = new App({
   appId: process.env.APP_ID,
@@ -25,20 +19,7 @@ const webhooks = new Webhooks({
 });
 
 // Default copyright text
-const defaultCopyrightText = "© {{YEAR}} viraj-m-jay. All Rights Reserved.";
-
-// Log all webhook events
-app.webhooks.onAny(({ id, name, payload }) => {
-  console.log(`Webhook received: ${name} (ID: ${id})`);
-  console.log("Payload:", JSON.stringify(payload, null, 2));
-});
-
-// Log webhook errors safely
-app.webhooks.onError(({ error, request }) => {
-  console.error("Webhook error:", error.message || "Unknown error");
-  console.log("Request headers:", JSON.stringify(request.headers, null, 2));
-  console.log("Request body:", request.body);
-});
+const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
 // Helper function to fetch and format copyright text
 async function getCopyrightText(octokit, repoOwner, repoName, ref) {
@@ -77,8 +58,6 @@ app.webhooks.on("installation.created", async ({ payload }) => {
   const creator = sender.login;
 
   const octokit = await getInstallationOctokit(app, installationId);
-
-  try {
     for (const repo of repositories) {
       const repoOwner = repo.owner.login;
       const repoName = repo.name;
@@ -217,20 +196,17 @@ app.webhooks.on("installation.created", async ({ payload }) => {
       console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
     }
     console.timeEnd("handleInstallationEvent");
-  } catch (error) {
-    console.error("Error processing installation event:", error.message || "Unknown error");
-    console.timeEnd("handleInstallationEvent");
-    throw error;
-  }
+  
 });
 
+// Handle push events
 // Handle push events
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
   console.time("handlePushEvent");
 
-  const { repository, installation, sender, ref, commits } = payload;
+  const { repository, installation, sender, ref } = payload;
   const installationId = installation.id;
 
   if (sender.login === "copyright-app[bot]") {
@@ -259,37 +235,23 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const treeSha = commitData.tree.sha;
 
-    const isCopyrightTxtChanged = commits.some(commit =>
-      commit.added?.includes("copyright.txt") || commit.modified?.includes("copyright.txt")
-    );
+    // Always fetch all files in the repository
+    const { data: treeData } = await octokit.git.getTree({
+      owner: repoOwner,
+      repo: repoName,
+      tree_sha: treeSha,
+      recursive: true,
+    });
+    
+    // Filter for supported file types
+    const filesToProcess = treeData.tree
+      .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
+      .map(item => item.path);
 
-    let filesToProcess;
-    if (isCopyrightTxtChanged) {
-      const { data: treeData } = await octokit.git.getTree({
-        owner: repoOwner,
-        repo: repoName,
-        tree_sha: treeSha,
-        recursive: true,
-      });
-      filesToProcess = treeData.tree
-        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-        .map(item => item.path);
-    } else {
-      const newFiles = new Set();
-      commits.forEach(commit => {
-        commit.added?.forEach(file => {
-          if (supportedExtensions.some(ext => file.endsWith(ext))) {
-            newFiles.add(file);
-          }
-        });
-      });
-      filesToProcess = Array.from(newFiles);
-    }
-
-    console.log("Files to process:", filesToProcess);
+    console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
 
     if (filesToProcess.length === 0) {
-      console.log("No files to process, skipping...");
+      console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
       console.timeEnd("handlePushEvent");
       return;
     }
@@ -301,7 +263,7 @@ app.webhooks.on("push", async ({ payload }) => {
     const currentDate = new Date().toISOString().split("T")[0];
 
     for (const filePath of filesToProcess) {
-      console.log("Processing file:", filePath);
+      console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
       const { data: fileData } = await octokit.repos.getContent({
         owner: repoOwner,
         repo: repoName,
@@ -359,7 +321,7 @@ app.webhooks.on("push", async ({ payload }) => {
     }
 
     if (!changesMade) {
-      console.log("No changes needed.");
+      console.log(`No changes needed in ${repoOwner}/${repoName}`);
       console.timeEnd("handlePushEvent");
       return;
     }
@@ -374,7 +336,7 @@ app.webhooks.on("push", async ({ payload }) => {
     const { data: newCommitData } = await octokit.git.createCommit({
       owner: repoOwner,
       repo: repoName,
-      message: "chore: add copyright headers [skip ci]",
+      message: "chore: add copyright headers to all files [skip ci]",
       tree: newTreeData.sha,
       parents: [latestCommitSha],
     });
@@ -398,16 +360,11 @@ app.webhooks.on("push", async ({ payload }) => {
 
 // Custom middleware with manual validation
 const customMiddleware = async (req, res) => {
-  console.log(`Incoming request: ${req.method} ${req.url}`);
-  console.log("Headers:", JSON.stringify(req.headers, null, 2));
-
   let body = "";
   req.on("data", chunk => {
     body += chunk.toString();
   });
   req.on("end", async () => {
-    console.log("Raw body:", body);
-
     if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
       console.log("Serving health check page");
       res.writeHead(200, { "Content-Type": "text/html" });

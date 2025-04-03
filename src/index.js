@@ -21,6 +21,70 @@ const webhooks = new Webhooks({
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
+// Helper functions for watermarking
+function stringToBinary(str) {
+  return str.split('')
+    .map(char => char.charCodeAt(0).toString(2).padStart(8, '0'))
+    .join('');
+}
+
+function splitIntoChunks(binaryStr, chunkSize) {
+  const chunks = [];
+  for (let i = 0; i < binaryStr.length; i += chunkSize) {
+    chunks.push(binaryStr.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+function generateWatermark() {
+  const uniqueString = Math.random().toString(36).substring(2, 8);
+  const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
+  return `WM:YourApp-${uniqueString}-${timestamp}`;
+}
+
+function buildCommentWithWatermark(syntax, baseCopyright, currentDate, creator, watermark, chunkSize = 8) {
+  const binaryWatermark = stringToBinary(watermark);
+  const chunks = splitIntoChunks(binaryWatermark, chunkSize);
+
+  const baseLines = [
+    "Copyright Header",
+    baseCopyright,
+    `Created date : ${currentDate}`,
+    `Created by : ${creator}`,
+  ];
+
+  // Add extra blank lines if needed
+  const totalLines = Math.max(baseLines.length, chunks.length);
+  const lines = [...baseLines];
+  while (lines.length < totalLines) {
+    lines.push("");
+  }
+
+  // Encode each chunk
+  const encodedLines = lines.map((line, index) => {
+    if (index < chunks.length) {
+      const encodedChunk = chunks[index].replace(/0/g, " ").replace(/1/g, "\t");
+      return line + encodedChunk;
+    }
+    return line;
+  });
+
+  // Construct full comment
+  let fullComment;
+  if (syntax.end) {
+    // Multi-line comment
+    const prefix = syntax.line ? ` ${syntax.line} ` : '';
+    fullComment = `${syntax.start}\n` +
+                  encodedLines.map(line => `${prefix}${line}`).join("\n") +
+                  `\n${syntax.end}\n\n`;
+  } else {
+    // Single-line comment
+    fullComment = encodedLines.map(line => `${syntax.start} ${line}`).join("\n") + "\n\n";
+  }
+
+  return fullComment;
+}
+
 // Helper function to fetch and format copyright text
 async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   let copyrightText = defaultCopyrightText;
@@ -47,7 +111,7 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   return copyrightText;
 }
 
-// Handle installation events: Process all files when app is installed
+// Handle installation events
 app.webhooks.on("installation.created", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received installation.created event for:", payload.repositories.map(r => r.full_name));
@@ -58,148 +122,133 @@ app.webhooks.on("installation.created", async ({ payload }) => {
   const creator = sender.login;
 
   const octokit = await getInstallationOctokit(app, installationId);
-    for (const repo of repositories) {
-      const repoOwner = repo.owner.login;
-      const repoName = repo.name;
+  for (const repo of repositories) {
+    const repoOwner = repo.owner.login;
+    const repoName = repo.name;
+    const watermark = generateWatermark(); // One watermark per repository
 
-      // Get the default branch
-      const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
-      const defaultBranch = repoData.default_branch;
+    // Get the default branch
+    const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
+    const defaultBranch = repoData.default_branch;
 
-      // Get the latest commit SHA of the default branch
-      const { data: refData } = await octokit.git.getRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-      });
-      const latestCommitSha = refData.object.sha;
+    // Get the latest commit SHA
+    const { data: refData } = await octokit.git.getRef({
+      owner: repoOwner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`,
+    });
+    const latestCommitSha = refData.object.sha;
 
-      // Get the commit data to access the tree
-      const { data: commitData } = await octokit.git.getCommit({
-        owner: repoOwner,
-        repo: repoName,
-        commit_sha: latestCommitSha,
-      });
-      const treeSha = commitData.tree.sha;
+    // Get the commit data
+    const { data: commitData } = await octokit.git.getCommit({
+      owner: repoOwner,
+      repo: repoName,
+      commit_sha: latestCommitSha,
+    });
+    const treeSha = commitData.tree.sha;
 
-      // Fetch all files recursively
-      const { data: treeData } = await octokit.git.getTree({
-        owner: repoOwner,
-        repo: repoName,
-        tree_sha: treeSha,
-        recursive: true,
-      });
+    // Fetch all files
+    const { data: treeData } = await octokit.git.getTree({
+      owner: repoOwner,
+      repo: repoName,
+      tree_sha: treeSha,
+      recursive: true,
+    });
 
-      const filesToProcess = treeData.tree
-        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-        .map(item => item.path);
+    const filesToProcess = treeData.tree
+      .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
+      .map(item => item.path);
 
-      console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
+    console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
 
-      if (filesToProcess.length === 0) {
-        console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
-        continue;
-      }
-
-      const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
-      let changesMade = false;
-      const newTree = [];
-      const currentYear = new Date().getFullYear();
-      const currentDate = new Date().toISOString().split("T")[0];
-
-      for (const filePath of filesToProcess) {
-        console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
-        const { data: fileData } = await octokit.repos.getContent({
-          owner: repoOwner,
-          repo: repoName,
-          path: filePath,
-          ref: latestCommitSha,
-        });
-        let content = Buffer.from(fileData.content, "base64").toString("utf8");
-        const lines = content.split("\n");
-        const firstTenLines = lines.slice(0, 10).join("\n");
-
-        if (firstTenLines.includes("Copyright Header")) {
-          console.log(`Skipping ${filePath}: Copyright header already present`);
-          continue;
-        }
-
-        const syntax = getCommentSyntax(filePath);
-        if (!syntax) {
-          console.log(`Skipping ${filePath}: No comment syntax`);
-          continue;
-        }
-
-        const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
-        let fullComment;
-        if (syntax.end) {
-          const prefix = syntax.line ? ` ${syntax.line} ` : '';
-          fullComment = `${syntax.start}\n` +
-                        `${prefix}Copyright Header\n` +
-                        `${prefix}${baseCopyright}\n` +
-                        `${prefix}Created date : ${currentDate}\n` +
-                        `${prefix}Created by : ${creator}\n` +
-                        `${syntax.end}\n\n`;
-        } else {
-          fullComment = `${syntax.start} Copyright Header\n` +
-                        `${syntax.start} ${baseCopyright}\n` +
-                        `${syntax.start} Created date : ${currentDate}\n` +
-                        `${syntax.start} Created by : ${creator}\n\n`;
-        }
-
-        content = fullComment + content;
-        const { data: blobData } = await octokit.git.createBlob({
-          owner: repoOwner,
-          repo: repoName,
-          content: content,
-          encoding: "utf-8",
-        });
-
-        newTree.push({
-          path: filePath,
-          mode: "100644",
-          type: "blob",
-          sha: blobData.sha,
-        });
-        changesMade = true;
-        console.log(`Updated ${filePath} with copyright`);
-      }
-
-      if (!changesMade) {
-        console.log(`No changes needed in ${repoOwner}/${repoName}`);
-        continue;
-      }
-
-      const { data: newTreeData } = await octokit.git.createTree({
-        owner: repoOwner,
-        repo: repoName,
-        base_tree: treeSha,
-        tree: newTree,
-      });
-
-      const { data: newCommitData } = await octokit.git.createCommit({
-        owner: repoOwner,
-        repo: repoName,
-        message: "chore: add copyright headers on installation [skip ci]",
-        tree: newTreeData.sha,
-        parents: [latestCommitSha],
-      });
-
-      await octokit.git.updateRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-        sha: newCommitData.sha,
-        force: false,
-      });
-
-      console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
+    if (filesToProcess.length === 0) {
+      console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
+      continue;
     }
-    console.timeEnd("handleInstallationEvent");
-  
+
+    const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
+    let changesMade = false;
+    const newTree = [];
+    const currentYear = new Date().getFullYear();
+    const currentDate = new Date().toISOString().split("T")[0];
+
+    for (const filePath of filesToProcess) {
+      console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
+      const { data: fileData } = await octokit.repos.getContent({
+        owner: repoOwner,
+        repo: repoName,
+        path: filePath,
+        ref: latestCommitSha,
+      });
+      let content = Buffer.from(fileData.content, "base64").toString("utf8");
+      const lines = content.split("\n");
+      const firstTenLines = lines.slice(0, 10).join("\n");
+
+      if (firstTenLines.includes("Copyright Header")) {
+        console.log(`Skipping ${filePath}: Copyright header already present`);
+        continue;
+      }
+
+      const syntax = getCommentSyntax(filePath);
+      if (!syntax) {
+        console.log(`Skipping ${filePath}: No comment syntax`);
+        continue;
+      }
+
+      const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
+      const fullComment = buildCommentWithWatermark(syntax, baseCopyright, currentDate, creator, watermark);
+
+      content = fullComment + content;
+      const { data: blobData } = await octokit.git.createBlob({
+        owner: repoOwner,
+        repo: repoName,
+        content: content,
+        encoding: "utf-8",
+      });
+
+      newTree.push({
+        path: filePath,
+        mode: "100644",
+        type: "blob",
+        sha: blobData.sha,
+      });
+      changesMade = true;
+      console.log(`Updated ${filePath} with copyright and watermark`);
+    }
+
+    if (!changesMade) {
+      console.log(`No changes needed in ${repoOwner}/${repoName}`);
+      continue;
+    }
+
+    const { data: newTreeData } = await octokit.git.createTree({
+      owner: repoOwner,
+      repo: repoName,
+      base_tree: treeSha,
+      tree: newTree,
+    });
+
+    const { data: newCommitData } = await octokit.git.createCommit({
+      owner: repoOwner,
+      repo: repoName,
+      message: "chore: add copyright headers on installation [skip ci]",
+      tree: newTreeData.sha,
+      parents: [latestCommitSha],
+    });
+
+    await octokit.git.updateRef({
+      owner: repoOwner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`,
+      sha: newCommitData.sha,
+      force: false,
+    });
+
+    console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
+  }
+  console.timeEnd("handleInstallationEvent");
 });
 
-// Handle push events
 // Handle push events
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
@@ -219,6 +268,7 @@ app.webhooks.on("push", async ({ payload }) => {
   const repoName = repository.name;
   const branch = ref.replace("refs/heads/", "");
   const creator = sender.login;
+  const watermark = generateWatermark(); // One watermark per push event
 
   try {
     const { data: refData } = await octokit.git.getRef({
@@ -235,15 +285,13 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const treeSha = commitData.tree.sha;
 
-    // Always fetch all files in the repository
     const { data: treeData } = await octokit.git.getTree({
       owner: repoOwner,
       repo: repoName,
       tree_sha: treeSha,
       recursive: true,
     });
-    
-    // Filter for supported file types
+
     const filesToProcess = treeData.tree
       .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
       .map(item => item.path);
@@ -286,21 +334,7 @@ app.webhooks.on("push", async ({ payload }) => {
       }
 
       const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
-      let fullComment;
-      if (syntax.end) {
-        const prefix = syntax.line ? ` ${syntax.line} ` : '';
-        fullComment = `${syntax.start}\n` +
-                      `${prefix}Copyright Header\n` +
-                      `${prefix}${baseCopyright}\n` +
-                      `${prefix}Created date : ${currentDate}\n` +
-                      `${prefix}Created by : ${creator}\n` +
-                      `${syntax.end}\n\n`;
-      } else {
-        fullComment = `${syntax.start} Copyright Header\n` +
-                      `${syntax.start} ${baseCopyright}\n` +
-                      `${syntax.start} Created date : ${currentDate}\n` +
-                      `${syntax.start} Created by : ${creator}\n\n`;
-      }
+      const fullComment = buildCommentWithWatermark(syntax, baseCopyright, currentDate, creator, watermark);
 
       content = fullComment + content;
       const { data: blobData } = await octokit.git.createBlob({
@@ -317,7 +351,7 @@ app.webhooks.on("push", async ({ payload }) => {
         sha: blobData.sha,
       });
       changesMade = true;
-      console.log(`Updated ${filePath} with copyright`);
+      console.log(`Updated ${filePath} with copyright and watermark`);
     }
 
     if (!changesMade) {
