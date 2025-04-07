@@ -48,156 +48,156 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
 }
 
 // Handle installation events: Process all files when app is installed
-app.webhooks.on("installation.created", async ({ payload }) => {
-  console.log("Webhook handler triggered");
-  console.log("Received installation.created event for:", payload.repositories.map(r => r.full_name));
-  console.time("handleInstallationEvent");
+// app.webhooks.on("installation.created", async ({ payload }) => {
+//   console.log("Webhook handler triggered");
+//   console.log("Received installation.created event for:", payload.repositories.map(r => r.full_name));
+//   console.time("handleInstallationEvent");
 
-  const { installation, sender, repositories } = payload;
-  const installationId = installation.id;
-  const creator = sender.login;
+//   const { installation, sender, repositories } = payload;
+//   const installationId = installation.id;
+//   const creator = sender.login;
 
-  const octokit = await getInstallationOctokit(app, installationId);
-    for (const repo of repositories) {
-      const repoOwner = repo.owner.login;
-      const repoName = repo.name;
+//   const octokit = await getInstallationOctokit(app, installationId);
+//     for (const repo of repositories) {
+//       const repoOwner = repo.owner.login;
+//       const repoName = repo.name;
 
-      // Get the default branch
-      const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
-      const defaultBranch = repoData.default_branch;
+//       // Get the default branch
+//       const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
+//       const defaultBranch = repoData.default_branch;
 
-      // Get the latest commit SHA of the default branch
-      const { data: refData } = await octokit.git.getRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-      });
-      const latestCommitSha = refData.object.sha;
+//       // Get the latest commit SHA of the default branch
+//       const { data: refData } = await octokit.git.getRef({
+//         owner: repoOwner,
+//         repo: repoName,
+//         ref: `heads/${defaultBranch}`,
+//       });
+//       const latestCommitSha = refData.object.sha;
 
-      // Get the commit data to access the tree
-      const { data: commitData } = await octokit.git.getCommit({
-        owner: repoOwner,
-        repo: repoName,
-        commit_sha: latestCommitSha,
-      });
-      const treeSha = commitData.tree.sha;
+//       // Get the commit data to access the tree
+//       const { data: commitData } = await octokit.git.getCommit({
+//         owner: repoOwner,
+//         repo: repoName,
+//         commit_sha: latestCommitSha,
+//       });
+//       const treeSha = commitData.tree.sha;
 
-      // Fetch all files recursively
-      const { data: treeData } = await octokit.git.getTree({
-        owner: repoOwner,
-        repo: repoName,
-        tree_sha: treeSha,
-        recursive: true,
-      });
+//       // Fetch all files recursively
+//       const { data: treeData } = await octokit.git.getTree({
+//         owner: repoOwner,
+//         repo: repoName,
+//         tree_sha: treeSha,
+//         recursive: true,
+//       });
 
-      const filesToProcess = treeData.tree
-        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-        .map(item => item.path);
+//       const filesToProcess = treeData.tree
+//         .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
+//         .map(item => item.path);
 
-      console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
+//       console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
 
-      if (filesToProcess.length === 0) {
-        console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
-        continue;
-      }
+//       if (filesToProcess.length === 0) {
+//         console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
+//         continue;
+//       }
 
-      const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
-      let changesMade = false;
-      const newTree = [];
-      const currentYear = new Date().getFullYear();
-      const currentDate = new Date().toISOString().split("T")[0];
+//       const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
+//       let changesMade = false;
+//       const newTree = [];
+//       const currentYear = new Date().getFullYear();
+//       const currentDate = new Date().toISOString().split("T")[0];
 
-      for (const filePath of filesToProcess) {
-        console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
-        const { data: fileData } = await octokit.repos.getContent({
-          owner: repoOwner,
-          repo: repoName,
-          path: filePath,
-          ref: latestCommitSha,
-        });
-        let content = Buffer.from(fileData.content, "base64").toString("utf8");
-        const lines = content.split("\n");
-        const firstTenLines = lines.slice(0, 10).join("\n");
+//       for (const filePath of filesToProcess) {
+//         console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
+//         const { data: fileData } = await octokit.repos.getContent({
+//           owner: repoOwner,
+//           repo: repoName,
+//           path: filePath,
+//           ref: latestCommitSha,
+//         });
+//         let content = Buffer.from(fileData.content, "base64").toString("utf8");
+//         const lines = content.split("\n");
+//         const firstTenLines = lines.slice(0, 10).join("\n");
 
-        if (firstTenLines.includes("Copyright Header")) {
-          console.log(`Skipping ${filePath}: Copyright header already present`);
-          continue;
-        }
+//         if (firstTenLines.includes("Copyright Header")) {
+//           console.log(`Skipping ${filePath}: Copyright header already present`);
+//           continue;
+//         }
 
-        const syntax = getCommentSyntax(filePath);
-        if (!syntax) {
-          console.log(`Skipping ${filePath}: No comment syntax`);
-          continue;
-        }
+//         const syntax = getCommentSyntax(filePath);
+//         if (!syntax) {
+//           console.log(`Skipping ${filePath}: No comment syntax`);
+//           continue;
+//         }
 
-        const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
-        let fullComment;
-        if (syntax.end) {
-          const prefix = syntax.line ? ` ${syntax.line} ` : '';
-          fullComment = `${syntax.start}\n` +
-                        `${prefix}Copyright Header\n` +
-                        `${prefix}${baseCopyright}\n` +
-                        `${prefix}Created date : ${currentDate}\n` +
-                        `${prefix}Created by : ${creator}\n` +
-                        `${syntax.end}\n\n`;
-        } else {
-          fullComment = `${syntax.start} Copyright Header\n` +
-                        `${syntax.start} ${baseCopyright}\n` +
-                        `${syntax.start} Created date : ${currentDate}\n` +
-                        `${syntax.start} Created by : ${creator}\n\n`;
-        }
+//         const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
+//         let fullComment;
+//         if (syntax.end) {
+//           const prefix = syntax.line ? ` ${syntax.line} ` : '';
+//           fullComment = `${syntax.start}\n` +
+//                         `${prefix}Copyright Header\n` +
+//                         `${prefix}${baseCopyright}\n` +
+//                         `${prefix}Created date : ${currentDate}\n` +
+//                         `${prefix}Created by : ${creator}\n` +
+//                         `${syntax.end}\n\n`;
+//         } else {
+//           fullComment = `${syntax.start} Copyright Header\n` +
+//                         `${syntax.start} ${baseCopyright}\n` +
+//                         `${syntax.start} Created date : ${currentDate}\n` +
+//                         `${syntax.start} Created by : ${creator}\n\n`;
+//         }
 
-        content = fullComment + content;
-        const { data: blobData } = await octokit.git.createBlob({
-          owner: repoOwner,
-          repo: repoName,
-          content: content,
-          encoding: "utf-8",
-        });
+//         content = fullComment + content;
+//         const { data: blobData } = await octokit.git.createBlob({
+//           owner: repoOwner,
+//           repo: repoName,
+//           content: content,
+//           encoding: "utf-8",
+//         });
 
-        newTree.push({
-          path: filePath,
-          mode: "100644",
-          type: "blob",
-          sha: blobData.sha,
-        });
-        changesMade = true;
-        console.log(`Updated ${filePath} with copyright`);
-      }
+//         newTree.push({
+//           path: filePath,
+//           mode: "100644",
+//           type: "blob",
+//           sha: blobData.sha,
+//         });
+//         changesMade = true;
+//         console.log(`Updated ${filePath} with copyright`);
+//       }
 
-      if (!changesMade) {
-        console.log(`No changes needed in ${repoOwner}/${repoName}`);
-        continue;
-      }
+//       if (!changesMade) {
+//         console.log(`No changes needed in ${repoOwner}/${repoName}`);
+//         continue;
+//       }
 
-      const { data: newTreeData } = await octokit.git.createTree({
-        owner: repoOwner,
-        repo: repoName,
-        base_tree: treeSha,
-        tree: newTree,
-      });
+//       const { data: newTreeData } = await octokit.git.createTree({
+//         owner: repoOwner,
+//         repo: repoName,
+//         base_tree: treeSha,
+//         tree: newTree,
+//       });
 
-      const { data: newCommitData } = await octokit.git.createCommit({
-        owner: repoOwner,
-        repo: repoName,
-        message: "chore: add copyright headers on installation [skip ci]",
-        tree: newTreeData.sha,
-        parents: [latestCommitSha],
-      });
+//       const { data: newCommitData } = await octokit.git.createCommit({
+//         owner: repoOwner,
+//         repo: repoName,
+//         message: "chore: add copyright headers on installation [skip ci]",
+//         tree: newTreeData.sha,
+//         parents: [latestCommitSha],
+//       });
 
-      await octokit.git.updateRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-        sha: newCommitData.sha,
-        force: false,
-      });
+//       await octokit.git.updateRef({
+//         owner: repoOwner,
+//         repo: repoName,
+//         ref: `heads/${defaultBranch}`,
+//         sha: newCommitData.sha,
+//         force: false,
+//       });
 
-      console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
-    }
-    console.timeEnd("handleInstallationEvent");
+//       console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
+//     }
+//     console.timeEnd("handleInstallationEvent");
   
-});
+// });
 
 // Handle push events
 // Handle push events
