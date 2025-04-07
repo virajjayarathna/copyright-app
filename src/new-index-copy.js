@@ -116,28 +116,46 @@ async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
 // Modify a file to include encrypted identifier parts as comments
 function addEncryptedComments(content, filePath, parts) {
   const lines = content.split("\n");
-  while (lines.length < 16) {
-    lines.push('');
-  }
+  const targetLines = [11, 17, 22, 26, 31]; // 1-indexed target lines
   const syntax = getCommentSyntax(filePath);
   if (!syntax) return content;
-  for (let i = 0; i < Math.min(parts.length, 5); i++) {
-    const lineNumber = 11 + i;
-    if (lineNumber < lines.length) {
-      const commentChar = syntax.line || (syntax.start.includes('/*') ? '' : syntax.start);
-      const lineEnd = commentChar ? ` ${commentChar} ${parts[i]}` : ` // ${parts[i]}`;
-      if (lines[lineNumber].includes("//") || lines[lineNumber].includes(commentChar)) {
-        lines[lineNumber] = lines[lineNumber].split(/\/\/|commentChar/)[0] + lineEnd;
-      } else {
-        lines[lineNumber] = lines[lineNumber].trimEnd() + lineEnd;
-      }
-    } else {
+
+  const newLines = [];
+  let partIdx = 0;
+
+  // Iterate through all lines up to the max required line or original length
+  for (let i = 1; i <= Math.max(targetLines[targetLines.length - 1], lines.length); i++) {
+    if (partIdx < parts.length && i === targetLines[partIdx]) {
       const commentChar = syntax.line || syntax.start;
-      lines.push(`${commentChar} ${parts[i]}`);
+      const comment = `${commentChar} OWNER_ID: ${parts[partIdx]}`;
+      newLines.push(comment); // Insert comment before the existing line
+      partIdx++;
+    }
+    // Add the original line if it exists, otherwise add an empty line
+    if (i <= lines.length) {
+      newLines.push(lines[i - 1]);
+    } else {
+      newLines.push('');
     }
   }
-  return lines.join("\n");
+
+  // Handle any remaining parts if the file was shorter than the last target line
+  while (partIdx < parts.length) {
+    const commentChar = syntax.line || syntax.start;
+    const comment = `${commentChar} OWNER_ID: ${parts[partIdx]}`;
+    newLines.push(comment);
+    partIdx++;
+  }
+
+  return newLines.join("\n");
 }
+
+// Example usage (for testing purposes, replace with your actual encryption logic)
+const content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11";
+const filePath = "example.js";
+const parts = ["USp+BYejb", "abc123", "xyz789", "def456", "ghi000"];
+const modifiedContent = addEncryptedComments(content, filePath, parts);
+console.log(modifiedContent);
 
 // Save copyright and encryption info to a file in the repo
 async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptionDetails, commitSha) {
