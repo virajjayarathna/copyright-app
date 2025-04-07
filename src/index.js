@@ -126,8 +126,14 @@ function addEncryptedComments(content, filePath, parts) {
   // Iterate through all lines up to the max required line or original length
   for (let i = 1; i <= Math.max(targetLines[targetLines.length - 1], lines.length); i++) {
     if (partIdx < parts.length && i === targetLines[partIdx]) {
-      const commentChar = syntax.line || syntax.start;
-      const comment = `${commentChar} OWNER_ID: ${parts[partIdx]}`;
+      let comment;
+      if (syntax.end) {
+        // For multi-line comments, use both start and end delimiters
+        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
+      } else {
+        // For single-line comments, use start only
+        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
+      }
       newLines.push(comment); // Insert comment before the existing line
       partIdx++;
     }
@@ -141,8 +147,12 @@ function addEncryptedComments(content, filePath, parts) {
 
   // Handle any remaining parts if the file was shorter than the last target line
   while (partIdx < parts.length) {
-    const commentChar = syntax.line || syntax.start;
-    const comment = `${commentChar} OWNER_ID: ${parts[partIdx]}`;
+    let comment;
+    if (syntax.end) {
+      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
+    } else {
+      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
+    }
     newLines.push(comment);
     partIdx++;
   }
