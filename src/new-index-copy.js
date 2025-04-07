@@ -129,10 +129,12 @@ async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
       ref,
     }).catch(() => ({ data: null }));
 
-    const encryptionKey = `qwer1234`;
+    const encryptionKey = keyFile ? 
+      Buffer.from(keyFile.content, "base64").toString("utf8").trim() : 
+      `${repoOwner}-${repoName}-key`;
     
     // Generate encrypted project name
-    const projectName = `casineo`;
+    const projectName = `${repoOwner}/${repoName}`;
     const encryptedString = encryptProjectName(projectName, encryptionKey);
     const parts = splitStringIntoParts(encryptedString, 5);
     
