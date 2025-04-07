@@ -24,46 +24,29 @@ const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
 // Encryption functions adapted from the Python script
 function generateFernetKey(keyString) {
-  // Create a consistent key by hashing the input string
   const hashedKey = crypto.createHash('sha256').update(keyString).digest();
-  // Convert to base64 format
   return Buffer.from(hashedKey.slice(0, 32)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function encryptProjectName(projectName, key) {
-  // Generate encryption key
   const fernetKey = generateFernetKey(key);
-  
-  // Node.js doesn't have Fernet directly, so we'll use a similar approach with AES
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
-  
-  // Encrypt the project name
   let encrypted = cipher.update(projectName, 'utf8', 'base64');
   encrypted += cipher.final('base64');
-  
-  // Combine IV and encrypted data and encode as base64
   const combined = Buffer.concat([iv, Buffer.from(encrypted, 'base64')]);
   return combined.toString('base64');
 }
 
 function decryptEncodedString(encodedString, key) {
   try {
-    // Generate key
     const fernetKey = generateFernetKey(key);
-    
-    // Decode base64
     const combined = Buffer.from(encodedString, 'base64');
-    
-    // Extract IV and encrypted data
     const iv = combined.slice(0, 16);
     const encryptedData = combined.slice(16);
-    
-    // Decrypt
     const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
     let decrypted = decipher.update(encryptedData, undefined, 'utf8');
     decrypted += decipher.final('utf8');
-    
     return decrypted;
   } catch (error) {
     console.error(`Error decrypting: ${error.message}`);
@@ -72,23 +55,16 @@ function decryptEncodedString(encodedString, key) {
 }
 
 function splitStringIntoParts(str, numParts = 5) {
-  // Split a string into approximately equal parts
   const partLength = Math.floor(str.length / numParts);
   const parts = [];
   let remaining = str;
-  
-  // Create the first n-1 parts
   for (let i = 0; i < numParts - 1; i++) {
     const variation = remaining.length % (numParts - i);
     const currentLength = partLength + (variation > 0 ? 1 : 0);
-    
     parts.push(remaining.substring(0, currentLength));
     remaining = remaining.substring(currentLength);
   }
-  
-  // Add the last part
   parts.push(remaining);
-  
   return parts;
 }
 
@@ -118,26 +94,13 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   return copyrightText;
 }
 
-// Helper function to generate and insert encrypted identifiers
+// Updated helper function with hardcoded values
 async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
   try {
-    // Try to fetch encryption-key.txt to get encryption key
-    const { data: keyFile } = await octokit.repos.getContent({
-      owner: repoOwner,
-      repo: repoName,
-      path: "encryption-key.txt",
-      ref,
-    }).catch(() => ({ data: null }));
-
-    const encryptionKey = keyFile ? 
-      Buffer.from(keyFile.content, "base64").toString("utf8").trim() : 
-      `${repoOwner}-${repoName}-key`;
-    
-    // Generate encrypted project name
-    const projectName = `${repoOwner}/${repoName}`;
+    const encryptionKey = `qwer1234`;
+    const projectName = `casineo`;
     const encryptedString = encryptProjectName(projectName, encryptionKey);
     const parts = splitStringIntoParts(encryptedString, 5);
-    
     return {
       projectName,
       encryptionKey,
@@ -153,23 +116,16 @@ async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
 // Modify a file to include encrypted identifier parts as comments
 function addEncryptedComments(content, filePath, parts) {
   const lines = content.split("\n");
-  
-  // Make sure file has at least 16 lines
   while (lines.length < 16) {
     lines.push('');
   }
-  
-  // Get comment syntax for the file
   const syntax = getCommentSyntax(filePath);
-  if (!syntax) return content; // If no syntax defined, return original content
-  
-  // Add comments to lines 12-16
+  if (!syntax) return content;
   for (let i = 0; i < Math.min(parts.length, 5); i++) {
-    const lineNumber = 11 + i; // Lines are 0-indexed
+    const lineNumber = 11 + i;
     if (lineNumber < lines.length) {
       const commentChar = syntax.line || (syntax.start.includes('/*') ? '' : syntax.start);
       const lineEnd = commentChar ? ` ${commentChar} ${parts[i]}` : ` // ${parts[i]}`;
-      
       if (lines[lineNumber].includes("//") || lines[lineNumber].includes(commentChar)) {
         lines[lineNumber] = lines[lineNumber].split(/\/\/|commentChar/)[0] + lineEnd;
       } else {
@@ -180,7 +136,6 @@ function addEncryptedComments(content, filePath, parts) {
       lines.push(`${commentChar} ${parts[i]}`);
     }
   }
-  
   return lines.join("\n");
 }
 
@@ -191,15 +146,12 @@ async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptio
       `Project Name: ${encryptionDetails.projectName}\n` +
       `Key: ${encryptionDetails.encryptionKey}\n` +
       `Full Encrypted: ${encryptionDetails.encryptedString}\n`;
-    
-    // Create blob with the content
     const { data: blobData } = await octokit.git.createBlob({
       owner: repoOwner,
       repo: repoName,
       content: infoContent,
       encoding: "utf-8",
     });
-    
     return {
       path: "copyright_info.txt",
       mode: "100644",
@@ -212,7 +164,7 @@ async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptio
   }
 }
 
-// Handle push events
+// Updated push event handler to prevent infinite loops
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
@@ -221,12 +173,22 @@ app.webhooks.on("push", async ({ payload }) => {
   const { repository, installation, sender, ref } = payload;
   const installationId = installation.id;
 
+  const octokit = await getInstallationOctokit(app, installationId);
+
+  // Skip if the latest commit is from the bot
+  if (payload.commits.length > 0) {
+    const latestCommit = payload.commits[payload.commits.length - 1];
+    if (latestCommit.message === "chore: add copyright headers with encrypted identifiers [skip ci]") {
+      console.log("Push contains bot commit, skipping...");
+      return;
+    }
+  }
+
   if (sender.login === "copyright-app[bot]") {
     console.log("Push from bot, skipping...");
     return;
   }
 
-  const octokit = await getInstallationOctokit(app, installationId);
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
   const branch = ref.replace("refs/heads/", "");
@@ -247,7 +209,6 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const treeSha = commitData.tree.sha;
 
-    // Always fetch all files in the repository
     const { data: treeData } = await octokit.git.getTree({
       owner: repoOwner,
       repo: repoName,
@@ -255,7 +216,6 @@ app.webhooks.on("push", async ({ payload }) => {
       recursive: true,
     });
     
-    // Filter for supported file types
     const filesToProcess = treeData.tree
       .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
       .map(item => item.path);
@@ -317,8 +277,6 @@ app.webhooks.on("push", async ({ payload }) => {
       }
 
       content = fullComment + content;
-      
-      // Add encrypted identifiers as comments to lines 12-16
       if (encryptionDetails) {
         content = addEncryptedComments(content, filePath, encryptionDetails.parts);
       }
@@ -340,7 +298,6 @@ app.webhooks.on("push", async ({ payload }) => {
       console.log(`Updated ${filePath} with copyright and encrypted identifiers`);
     }
 
-    // Add copyright_info.txt to the tree if encryption is enabled
     if (encryptionDetails) {
       const infoFileTree = await saveCopyrightInfo(
         octokit, 
@@ -350,7 +307,6 @@ app.webhooks.on("push", async ({ payload }) => {
         encryptionDetails, 
         latestCommitSha
       );
-      
       if (infoFileTree) {
         newTree.push(infoFileTree);
         changesMade = true;
@@ -397,7 +353,6 @@ app.webhooks.on("push", async ({ payload }) => {
 
 // Add a route to verify and decrypt encrypted strings
 app.webhooks.on("issues.opened", async ({ payload }) => {
-  // Only handle issues with title starting with "verify:"
   if (!payload.issue.title.toLowerCase().startsWith("verify:")) {
     return;
   }
@@ -407,10 +362,8 @@ app.webhooks.on("issues.opened", async ({ payload }) => {
   const octokit = await getInstallationOctokit(app, installationId);
   
   try {
-    // Extract encryptedString and key from issue body
     const lines = issue.body.split('\n');
     let encryptedString, key;
-    
     for (const line of lines) {
       if (line.startsWith("Encrypted:")) {
         encryptedString = line.replace("Encrypted:", "").trim();
@@ -418,7 +371,6 @@ app.webhooks.on("issues.opened", async ({ payload }) => {
         key = line.replace("Key:", "").trim();
       }
     }
-    
     if (!encryptedString || !key) {
       await octokit.issues.createComment({
         owner: repository.owner.login,
@@ -428,10 +380,7 @@ app.webhooks.on("issues.opened", async ({ payload }) => {
       });
       return;
     }
-    
-    // Try to decrypt
     const decrypted = decryptEncodedString(encryptedString, key);
-    
     if (decrypted) {
       await octokit.issues.createComment({
         owner: repository.owner.login,
