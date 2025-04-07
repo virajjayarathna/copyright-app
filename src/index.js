@@ -150,12 +150,6 @@ function addEncryptedComments(content, filePath, parts) {
   return newLines.join("\n");
 }
 
-// Placeholder for getCommentSyntax (assuming it exists in your script)
-function getCommentSyntax(filePath) {
-  // This should return an object like { line: "//", start: "/*", end: "*/" } based on file type
-  return { line: "//" }; // Default to JS comment syntax for this example
-}
-
 // Example usage (for testing purposes, replace with your actual encryption logic)
 const content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11";
 const filePath = "example.js";
