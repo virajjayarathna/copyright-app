@@ -167,31 +167,6 @@ const parts = ["USp+BYejb", "abc123", "xyz789", "def456", "ghi000"];
 const modifiedContent = addEncryptedComments(content, filePath, parts);
 console.log(modifiedContent);
 
-// Save copyright and encryption info to a file in the repo
-async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptionDetails, commitSha) {
-  try {
-    const infoContent = 
-      `Project Name: ${encryptionDetails.projectName}\n` +
-      `Key: ${encryptionDetails.encryptionKey}\n` + 
-      `Full Encrypted: ${encryptionDetails.encryptedString}\n`;
-    const { data: blobData } = await octokit.git.createBlob({
-      owner: repoOwner,
-      repo: repoName,
-      content: infoContent,
-      encoding: "utf-8",
-    });
-    return {
-      path: "copyright_info.txt",
-      mode: "100644",
-      type: "blob",
-      sha: blobData.sha
-    };
-  } catch (error) {
-    console.error("Error saving copyright info:", error.message);
-    return null;
-  }
-}
-
 // Updated push event handler to prevent infinite loops
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
@@ -324,21 +299,6 @@ app.webhooks.on("push", async ({ payload }) => {
       });
       changesMade = true;
       console.log(`Updated ${filePath} with copyright and encrypted identifiers`);
-    }
-
-    if (encryptionDetails) {
-      const infoFileTree = await saveCopyrightInfo(
-        octokit, 
-        repoOwner, 
-        repoName, 
-        branch, 
-        encryptionDetails, 
-        latestCommitSha
-      );
-      if (infoFileTree) {
-        newTree.push(infoFileTree);
-        changesMade = true;
-      }
     }
 
     if (!changesMade) {
