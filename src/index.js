@@ -100,8 +100,8 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
 // Updated helper function with hardcoded values
 async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
   try {
-    const encryptionKey = `qwer1234`;
-    const projectName = `casineo`;
+    const encryptionKey = `z9ogqrey1`;
+    const projectName = `kingit`;
     const encryptedString = encryptProjectName(projectName, encryptionKey);
     const parts = splitStringIntoParts(encryptedString, 5);
     return {
