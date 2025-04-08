@@ -22,15 +22,18 @@ const webhooks = new Webhooks({
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
-// Encryption functions adapted from the Python script
+// Encryption functions with deterministic IV
 function generateFernetKey(keyString) {
   const hashedKey = crypto.createHash('sha256').update(keyString).digest();
   return Buffer.from(hashedKey.slice(0, 32)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function encryptProjectName(projectName, key) {
+  // Generate a deterministic IV based on the key and project name
+  const ivSource = key + projectName;
+  const iv = crypto.createHash('md5').update(ivSource).digest().slice(0, 16);
+  
   const fernetKey = generateFernetKey(key);
-  const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
   let encrypted = cipher.update(projectName, 'utf8', 'base64');
   encrypted += cipher.final('base64');
@@ -159,13 +162,6 @@ function addEncryptedComments(content, filePath, parts) {
 
   return newLines.join("\n");
 }
-
-// Example usage (for testing purposes, replace with your actual encryption logic)
-const content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11";
-const filePath = "example.js";
-const parts = ["USp+BYejb", "abc123", "xyz789", "def456", "ghi000"];
-const modifiedContent = addEncryptedComments(content, filePath, parts);
-console.log(modifiedContent);
 
 // Updated push event handler to prevent infinite loops
 app.webhooks.on("push", async ({ payload }) => {
