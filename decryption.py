@@ -128,7 +128,7 @@ def main():
         print("Error: Failed to decrypt the project name")
         return
     
-    print(f"Decrypted project name: {project_name}")
+    print(f"Decrypted Secret: {project_name}")
     
     # Skip copyright verification and proceed with success
     print("Verification successful!")
