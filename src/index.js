@@ -171,6 +171,8 @@ console.log(modifiedContent);
 async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptionDetails, commitSha) {
   try {
     const infoContent = 
+      `Project Name: ${encryptionDetails.projectName}\n` +
+      `Key: ${encryptionDetails.encryptionKey}\n` + 
       `Full Encrypted: ${encryptionDetails.encryptedString}\n`;
     const { data: blobData } = await octokit.git.createBlob({
       owner: repoOwner,
