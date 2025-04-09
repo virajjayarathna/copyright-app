@@ -8,6 +8,6 @@ module.exports = {
     DEFAULT_COPYRIGHT_TEXT: "© {{YEAR}} Company. All Rights Reserved.",
     
     // Default encryption key
-    DEFAULT_ENCRYPTION_KEY: "z9ogqrey1",
-    DEFAULT_PROJECT_NAME: "kingit",
-  };
+    DEFAULT_ENCRYPTION_KEY: process.env.DEFAULT_ENCRYPTION_KEY || "z9ogqrey1",
+    DEFAULT_PROJECT_NAME: process.env.DEFAULT_PROJECT_NAME || "kingit",
+};
