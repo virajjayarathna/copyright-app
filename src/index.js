@@ -206,7 +206,7 @@ app.webhooks.on("push", async ({ payload }) => {
                       `${prefix}Copyright Header\n` +
                       `${prefix}${baseCopyright}\n` +
                       `${prefix}Created date : ${currentDate}\n` +
-                      `${prefix}Created by : ${creator}\n`;
+                      `${prefix}Auther : ${creator}\n`;
                       
         // Add OWNER_ID line if encryption details are available
         if (encryptionDetails) {
@@ -218,7 +218,7 @@ app.webhooks.on("push", async ({ payload }) => {
         fullComment = `${syntax.start} Copyright Header\n` +
                       `${syntax.start} ${baseCopyright}\n` +
                       `${syntax.start} Created date : ${currentDate}\n` +
-                      `${syntax.start} Created by : ${creator}\n`;
+                      `${syntax.start} Auther : ${creator}\n`;
                       
         // Add OWNER_ID line if encryption details are available
         if (encryptionDetails) {

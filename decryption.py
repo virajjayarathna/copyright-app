@@ -46,29 +46,24 @@ def get_comment_pattern(file_path):
     else:
         return r"//\s*OWNER_ID:\s*(\S+)"  # default to //
 
-def extract_parts_from_file(file_path):
-    """Extract encoded parts from comments containing 'OWNER_ID:' using the appropriate pattern."""
+def extract_encrypted_string_from_file(file_path):
+    """Extract the single complete encrypted string from the OWNER_ID line."""
     try:
         with open(file_path, 'r') as file:
             lines = file.readlines()
         
         pattern = get_comment_pattern(file_path)
-        parts = []
+        
         for line in lines:
             match = re.search(pattern, line)
             if match:
-                part = match.group(1).strip()
-                parts.append(part)
+                encrypted_string = match.group(1).strip()
+                return encrypted_string
         
-        if len(parts) < 5:
-            print(f"Warning: Only found {len(parts)} parts, expected 5.")
-        elif len(parts) > 5:
-            print(f"Warning: Found {len(parts)} parts, using first 5.")
-            parts = parts[:5]
-        
-        return parts
+        print("Warning: Could not find OWNER_ID in the file.")
+        return None
     except Exception as e:
-        print(f"Error extracting parts from file: {e}")
+        print(f"Error extracting encrypted string from file: {e}")
         return None
 
 def get_comment_syntax(file_path):
@@ -111,18 +106,16 @@ def main():
         print(f"Error: File {file_path} does not exist.")
         return
     
-    # Extract parts from file
-    parts = extract_parts_from_file(file_path)
-    if not parts or len(parts) < 5:
-        print("Error: Failed to extract all required parts.")
+    # Extract the encrypted string from file
+    encrypted_string = extract_encrypted_string_from_file(file_path)
+    if not encrypted_string:
+        print("Error: Failed to extract the encrypted string.")
         return
     
-    # Reconstruct the full encrypted string
-    full_encrypted = ''.join(parts)
-    print(f"Reconstructed encrypted string: {full_encrypted}")
+    print(f"Found encrypted string: {encrypted_string}")
     
-    # Decrypt the project name using the reconstructed string
-    project_name = decrypt_encoded_string(full_encrypted, key)
+    # Decrypt the project name using the encrypted string
+    project_name = decrypt_encoded_string(encrypted_string, key)
     
     if not project_name:
         print("Error: Failed to decrypt the project name")
