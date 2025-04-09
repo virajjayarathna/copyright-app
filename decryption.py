@@ -36,29 +36,28 @@ def get_comment_pattern(file_path):
     """Get the regex pattern for extracting OWNER_ID based on file extension."""
     ext = os.path.splitext(file_path)[1].lower()
     if ext in ['.js', '.jsx', '.ts', '.tsx']:
-        return r"//\s*OWNER_ID:\s*(\S+)"
+        return r"//.*OWNER_ID:\s*(\S+)"
     elif ext == '.py':
-        return r"#\s*OWNER_ID:\s*(\S+)"
+        return r"#.*OWNER_ID:\s*(\S+)"
     elif ext == '.css':
-        return r"/\*\s*OWNER_ID:\s*(\S+)\s*\*/"
+        return r"/\*.*OWNER_ID:\s*(\S+).*\*/"
     elif ext == '.html':
-        return r"<!--\s*OWNER_ID:\s*(\S+)\s*-->"
+        return r"<!--.*OWNER_ID:\s*(\S+).*-->"
     else:
-        return r"//\s*OWNER_ID:\s*(\S+)"  # default to //
+        return r"//.*OWNER_ID:\s*(\S+)"  # default to //
 
 def extract_encrypted_string_from_file(file_path):
     """Extract the single complete encrypted string from the OWNER_ID line."""
     try:
         with open(file_path, 'r') as file:
-            lines = file.readlines()
+            content = file.read()  # Read the entire file as a single string
         
         pattern = get_comment_pattern(file_path)
         
-        for line in lines:
-            match = re.search(pattern, line)
-            if match:
-                encrypted_string = match.group(1).strip()
-                return encrypted_string
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            encrypted_string = match.group(1).strip()
+            return encrypted_string
         
         print("Warning: Could not find OWNER_ID in the file.")
         return None
