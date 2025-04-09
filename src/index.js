@@ -57,20 +57,6 @@ function decryptEncodedString(encodedString, key) {
   }
 }
 
-function splitStringIntoParts(str, numParts = 5) {
-  const partLength = Math.floor(str.length / numParts);
-  const parts = [];
-  let remaining = str;
-  for (let i = 0; i < numParts - 1; i++) {
-    const variation = remaining.length % (numParts - i);
-    const currentLength = partLength + (variation > 0 ? 1 : 0);
-    parts.push(remaining.substring(0, currentLength));
-    remaining = remaining.substring(currentLength);
-  }
-  parts.push(remaining);
-  return parts;
-}
-
 // Helper function to fetch and format copyright text
 async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   let copyrightText = defaultCopyrightText;
@@ -97,70 +83,21 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   return copyrightText;
 }
 
-// Updated helper function with hardcoded values
 async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
   try {
     const encryptionKey = `z9ogqrey1`;
     const projectName = `kingit`;
     const encryptedString = encryptProjectName(projectName, encryptionKey);
-    const parts = splitStringIntoParts(encryptedString, 5);
+    
     return {
       projectName,
       encryptionKey,
-      encryptedString,
-      parts
+      encryptedString
     };
   } catch (error) {
     console.error("Error getting encryption details:", error.message);
     return null;
   }
-}
-
-// Modify a file to include encrypted identifier parts as comments
-function addEncryptedComments(content, filePath, parts) {
-  const lines = content.split("\n");
-  const targetLines = [11, 17, 22, 26, 31]; // 1-indexed target lines
-  const syntax = getCommentSyntax(filePath);
-  if (!syntax) return content;
-
-  const newLines = [];
-  let partIdx = 0;
-
-  // Iterate through all lines up to the max required line or original length
-  for (let i = 1; i <= Math.max(targetLines[targetLines.length - 1], lines.length); i++) {
-    if (partIdx < parts.length && i === targetLines[partIdx]) {
-      let comment;
-      if (syntax.end) {
-        // For multi-line comments, use both start and end delimiters
-        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
-      } else {
-        // For single-line comments, use start only
-        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
-      }
-      newLines.push(comment); // Insert comment before the existing line
-      partIdx++;
-    }
-    // Add the original line if it exists, otherwise add an empty line
-    if (i <= lines.length) {
-      newLines.push(lines[i - 1]);
-    } else {
-      newLines.push('');
-    }
-  }
-
-  // Handle any remaining parts if the file was shorter than the last target line
-  while (partIdx < parts.length) {
-    let comment;
-    if (syntax.end) {
-      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
-    } else {
-      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
-    }
-    newLines.push(comment);
-    partIdx++;
-  }
-
-  return newLines.join("\n");
 }
 
 // Updated push event handler to prevent infinite loops
@@ -259,26 +196,39 @@ app.webhooks.on("push", async ({ payload }) => {
       }
 
       const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
+      
+      // Create multi-line copyright header with OWNER_ID at the end
       let fullComment;
+      
       if (syntax.end) {
         const prefix = syntax.line ? ` ${syntax.line} ` : '';
         fullComment = `${syntax.start}\n` +
                       `${prefix}Copyright Header\n` +
                       `${prefix}${baseCopyright}\n` +
                       `${prefix}Created date : ${currentDate}\n` +
-                      `${prefix}Created by : ${creator}\n` +
-                      `${syntax.end}\n\n`;
+                      `${prefix}Created by : ${creator}\n`;
+                      
+        // Add OWNER_ID line if encryption details are available
+        if (encryptionDetails) {
+          fullComment += `${prefix}OWNER_ID: ${encryptionDetails.encryptedString}\n`;
+        }
+        
+        fullComment += `${syntax.end}\n\n`;
       } else {
         fullComment = `${syntax.start} Copyright Header\n` +
                       `${syntax.start} ${baseCopyright}\n` +
                       `${syntax.start} Created date : ${currentDate}\n` +
-                      `${syntax.start} Created by : ${creator}\n\n`;
+                      `${syntax.start} Created by : ${creator}\n`;
+                      
+        // Add OWNER_ID line if encryption details are available
+        if (encryptionDetails) {
+          fullComment += `${syntax.start} OWNER_ID: ${encryptionDetails.encryptedString}\n`;
+        }
+        
+        fullComment += "\n";
       }
 
       content = fullComment + content;
-      if (encryptionDetails) {
-        content = addEncryptedComments(content, filePath, encryptionDetails.parts);
-      }
 
       const { data: blobData } = await octokit.git.createBlob({
         owner: repoOwner,

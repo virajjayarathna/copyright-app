@@ -4,6 +4,7 @@ const { getInstallationOctokit } = require("./githubClient");
 const { getCommentSyntax, supportedExtensions } = require("./addCopyright");
 const http = require("http");
 const { Webhooks } = require("@octokit/webhooks");
+const crypto = require('crypto');
 
 // Initialize the GitHub App
 const app = new App({
@@ -20,6 +21,55 @@ const webhooks = new Webhooks({
 
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
+
+// Encryption functions with deterministic IV
+function generateFernetKey(keyString) {
+  const hashedKey = crypto.createHash('sha256').update(keyString).digest();
+  return Buffer.from(hashedKey.slice(0, 32)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function encryptProjectName(projectName, key) {
+  // Generate a deterministic IV based on the key and project name
+  const ivSource = key + projectName;
+  const iv = crypto.createHash('md5').update(ivSource).digest().slice(0, 16);
+  
+  const fernetKey = generateFernetKey(key);
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
+  let encrypted = cipher.update(projectName, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+  const combined = Buffer.concat([iv, Buffer.from(encrypted, 'base64')]);
+  return combined.toString('base64');
+}
+
+function decryptEncodedString(encodedString, key) {
+  try {
+    const fernetKey = generateFernetKey(key);
+    const combined = Buffer.from(encodedString, 'base64');
+    const iv = combined.slice(0, 16);
+    const encryptedData = combined.slice(16);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
+    let decrypted = decipher.update(encryptedData, undefined, 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (error) {
+    console.error(`Error decrypting: ${error.message}`);
+    return null;
+  }
+}
+
+function splitStringIntoParts(str, numParts = 5) {
+  const partLength = Math.floor(str.length / numParts);
+  const parts = [];
+  let remaining = str;
+  for (let i = 0; i < numParts - 1; i++) {
+    const variation = remaining.length % (numParts - i);
+    const currentLength = partLength + (variation > 0 ? 1 : 0);
+    parts.push(remaining.substring(0, currentLength));
+    remaining = remaining.substring(currentLength);
+  }
+  parts.push(remaining);
+  return parts;
+}
 
 // Helper function to fetch and format copyright text
 async function getCopyrightText(octokit, repoOwner, repoName, ref) {
@@ -47,160 +97,71 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
   return copyrightText;
 }
 
-// Handle installation events: Process all files when app is installed
-app.webhooks.on("installation.created", async ({ payload }) => {
-  console.log("Webhook handler triggered");
-  console.log("Received installation.created event for:", payload.repositories.map(r => r.full_name));
-  console.time("handleInstallationEvent");
+async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
+  try {
+    const encryptionKey = `z9ogqrey1`;
+    const projectName = `kingit`;
+    const encryptedString = encryptProjectName(projectName, encryptionKey);
+    const parts = splitStringIntoParts(encryptedString, 5);
+    return {
+      projectName,
+      encryptionKey,
+      encryptedString,
+      parts
+    };
+  } catch (error) {
+    console.error("Error getting encryption details:", error.message);
+    return null;
+  }
+}
 
-  const { installation, sender, repositories } = payload;
-  const installationId = installation.id;
-  const creator = sender.login;
+function addEncryptedComments(content, filePath, parts) {
+  const lines = content.split("\n");
+  const targetLines = [11, 17, 22, 26, 31]; // 1-indexed target lines
+  const syntax = getCommentSyntax(filePath);
+  if (!syntax) return content;
 
-  const octokit = await getInstallationOctokit(app, installationId);
-    for (const repo of repositories) {
-      const repoOwner = repo.owner.login;
-      const repoName = repo.name;
+  const newLines = [];
+  let partIdx = 0;
 
-      // Get the default branch
-      const { data: repoData } = await octokit.repos.get({ owner: repoOwner, repo: repoName });
-      const defaultBranch = repoData.default_branch;
-
-      // Get the latest commit SHA of the default branch
-      const { data: refData } = await octokit.git.getRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-      });
-      const latestCommitSha = refData.object.sha;
-
-      // Get the commit data to access the tree
-      const { data: commitData } = await octokit.git.getCommit({
-        owner: repoOwner,
-        repo: repoName,
-        commit_sha: latestCommitSha,
-      });
-      const treeSha = commitData.tree.sha;
-
-      // Fetch all files recursively
-      const { data: treeData } = await octokit.git.getTree({
-        owner: repoOwner,
-        repo: repoName,
-        tree_sha: treeSha,
-        recursive: true,
-      });
-
-      const filesToProcess = treeData.tree
-        .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
-        .map(item => item.path);
-
-      console.log(`Files to process in ${repoOwner}/${repoName}:`, filesToProcess);
-
-      if (filesToProcess.length === 0) {
-        console.log(`No supported files in ${repoOwner}/${repoName}, skipping...`);
-        continue;
+  // Iterate through all lines up to the max required line or original length
+  for (let i = 1; i <= Math.max(targetLines[targetLines.length - 1], lines.length); i++) {
+    if (partIdx < parts.length && i === targetLines[partIdx]) {
+      let comment;
+      if (syntax.end) {
+        // For multi-line comments, use both start and end delimiters
+        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
+      } else {
+        // For single-line comments, use start only
+        comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
       }
-
-      const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
-      let changesMade = false;
-      const newTree = [];
-      const currentYear = new Date().getFullYear();
-      const currentDate = new Date().toISOString().split("T")[0];
-
-      for (const filePath of filesToProcess) {
-        console.log(`Processing file: ${filePath} in ${repoOwner}/${repoName}`);
-        const { data: fileData } = await octokit.repos.getContent({
-          owner: repoOwner,
-          repo: repoName,
-          path: filePath,
-          ref: latestCommitSha,
-        });
-        let content = Buffer.from(fileData.content, "base64").toString("utf8");
-        const lines = content.split("\n");
-        const firstTenLines = lines.slice(0, 10).join("\n");
-
-        if (firstTenLines.includes("Copyright Header")) {
-          console.log(`Skipping ${filePath}: Copyright header already present`);
-          continue;
-        }
-
-        const syntax = getCommentSyntax(filePath);
-        if (!syntax) {
-          console.log(`Skipping ${filePath}: No comment syntax`);
-          continue;
-        }
-
-        const baseCopyright = copyrightText.replace("{{YEAR}}", currentYear);
-        let fullComment;
-        if (syntax.end) {
-          const prefix = syntax.line ? ` ${syntax.line} ` : '';
-          fullComment = `${syntax.start}\n` +
-                        `${prefix}Copyright Header\n` +
-                        `${prefix}${baseCopyright}\n` +
-                        `${prefix}Created date : ${currentDate}\n` +
-                        `${prefix}Created by : ${creator}\n` +
-                        `${syntax.end}\n\n`;
-        } else {
-          fullComment = `${syntax.start} Copyright Header\n` +
-                        `${syntax.start} ${baseCopyright}\n` +
-                        `${syntax.start} Created date : ${currentDate}\n` +
-                        `${syntax.start} Created by : ${creator}\n\n`;
-        }
-
-        content = fullComment + content;
-        const { data: blobData } = await octokit.git.createBlob({
-          owner: repoOwner,
-          repo: repoName,
-          content: content,
-          encoding: "utf-8",
-        });
-
-        newTree.push({
-          path: filePath,
-          mode: "100644",
-          type: "blob",
-          sha: blobData.sha,
-        });
-        changesMade = true;
-        console.log(`Updated ${filePath} with copyright`);
-      }
-
-      if (!changesMade) {
-        console.log(`No changes needed in ${repoOwner}/${repoName}`);
-        continue;
-      }
-
-      const { data: newTreeData } = await octokit.git.createTree({
-        owner: repoOwner,
-        repo: repoName,
-        base_tree: treeSha,
-        tree: newTree,
-      });
-
-      const { data: newCommitData } = await octokit.git.createCommit({
-        owner: repoOwner,
-        repo: repoName,
-        message: "chore: add copyright headers on installation [skip ci]",
-        tree: newTreeData.sha,
-        parents: [latestCommitSha],
-      });
-
-      await octokit.git.updateRef({
-        owner: repoOwner,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`,
-        sha: newCommitData.sha,
-        force: false,
-      });
-
-      console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${defaultBranch}`);
+      newLines.push(comment); // Insert comment before the existing line
+      partIdx++;
     }
-    console.timeEnd("handleInstallationEvent");
-  
-});
+    // Add the original line if it exists, otherwise add an empty line
+    if (i <= lines.length) {
+      newLines.push(lines[i - 1]);
+    } else {
+      newLines.push('');
+    }
+  }
 
-// Handle push events
-// Handle push events
+  // Handle any remaining parts if the file was shorter than the last target line
+  while (partIdx < parts.length) {
+    let comment;
+    if (syntax.end) {
+      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]} ${syntax.end}`;
+    } else {
+      comment = `${syntax.start} OWNER_ID: ${parts[partIdx]}`;
+    }
+    newLines.push(comment);
+    partIdx++;
+  }
+
+  return newLines.join("\n");
+}
+
+// Updated push event handler to prevent infinite loops
 app.webhooks.on("push", async ({ payload }) => {
   console.log("Webhook handler triggered");
   console.log("Received push event:", payload.repository.full_name);
@@ -209,12 +170,22 @@ app.webhooks.on("push", async ({ payload }) => {
   const { repository, installation, sender, ref } = payload;
   const installationId = installation.id;
 
+  const octokit = await getInstallationOctokit(app, installationId);
+
+  // Skip if the latest commit is from the bot
+  if (payload.commits.length > 0) {
+    const latestCommit = payload.commits[payload.commits.length - 1];
+    if (latestCommit.message === "chore: add copyright headers with encrypted identifiers [skip ci]") {
+      console.log("Push contains bot commit, skipping...");
+      return;
+    }
+  }
+
   if (sender.login === "copyright-app[bot]") {
     console.log("Push from bot, skipping...");
     return;
   }
 
-  const octokit = await getInstallationOctokit(app, installationId);
   const repoOwner = repository.owner.login;
   const repoName = repository.name;
   const branch = ref.replace("refs/heads/", "");
@@ -235,7 +206,6 @@ app.webhooks.on("push", async ({ payload }) => {
     });
     const treeSha = commitData.tree.sha;
 
-    // Always fetch all files in the repository
     const { data: treeData } = await octokit.git.getTree({
       owner: repoOwner,
       repo: repoName,
@@ -243,7 +213,6 @@ app.webhooks.on("push", async ({ payload }) => {
       recursive: true,
     });
     
-    // Filter for supported file types
     const filesToProcess = treeData.tree
       .filter(item => item.type === "blob" && supportedExtensions.some(ext => item.path.endsWith(ext)))
       .map(item => item.path);
@@ -257,6 +226,8 @@ app.webhooks.on("push", async ({ payload }) => {
     }
 
     const copyrightText = await getCopyrightText(octokit, repoOwner, repoName, latestCommitSha);
+    const encryptionDetails = await getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, latestCommitSha);
+    
     let changesMade = false;
     const newTree = [];
     const currentYear = new Date().getFullYear();
@@ -303,6 +274,10 @@ app.webhooks.on("push", async ({ payload }) => {
       }
 
       content = fullComment + content;
+      if (encryptionDetails) {
+        content = addEncryptedComments(content, filePath, encryptionDetails.parts);
+      }
+
       const { data: blobData } = await octokit.git.createBlob({
         owner: repoOwner,
         repo: repoName,
@@ -317,7 +292,7 @@ app.webhooks.on("push", async ({ payload }) => {
         sha: blobData.sha,
       });
       changesMade = true;
-      console.log(`Updated ${filePath} with copyright`);
+      console.log(`Updated ${filePath} with copyright and encrypted identifiers`);
     }
 
     if (!changesMade) {
@@ -336,7 +311,7 @@ app.webhooks.on("push", async ({ payload }) => {
     const { data: newCommitData } = await octokit.git.createCommit({
       owner: repoOwner,
       repo: repoName,
-      message: "chore: add copyright headers to all files [skip ci]",
+      message: "chore: add copyright headers with encrypted identifiers [skip ci]",
       tree: newTreeData.sha,
       parents: [latestCommitSha],
     });
@@ -349,12 +324,68 @@ app.webhooks.on("push", async ({ payload }) => {
       force: false,
     });
 
-    console.log(`Successfully added copyright to files in ${repoOwner}/${repoName} on branch ${branch}`);
+    console.log(`Successfully added copyright and encryption to files in ${repoOwner}/${repoName} on branch ${branch}`);
     console.timeEnd("handlePushEvent");
   } catch (error) {
     console.error("Error processing push event:", error.message || "Unknown error");
     console.timeEnd("handlePushEvent");
     throw error;
+  }
+});
+
+// Add a route to verify and decrypt encrypted strings
+app.webhooks.on("issues.opened", async ({ payload }) => {
+  if (!payload.issue.title.toLowerCase().startsWith("verify:")) {
+    return;
+  }
+
+  const { repository, installation, issue } = payload;
+  const installationId = installation.id;
+  const octokit = await getInstallationOctokit(app, installationId);
+  
+  try {
+    const lines = issue.body.split('\n');
+    let encryptedString, key;
+    for (const line of lines) {
+      if (line.startsWith("Encrypted:")) {
+        encryptedString = line.replace("Encrypted:", "").trim();
+      } else if (line.startsWith("Key:")) {
+        key = line.replace("Key:", "").trim();
+      }
+    }
+    if (!encryptedString || !key) {
+      await octokit.issues.createComment({
+        owner: repository.owner.login,
+        repo: repository.name,
+        issue_number: issue.number,
+        body: "Missing required information. Please provide both 'Encrypted:' and 'Key:' values."
+      });
+      return;
+    }
+    const decrypted = decryptEncodedString(encryptedString, key);
+    if (decrypted) {
+      await octokit.issues.createComment({
+        owner: repository.owner.login,
+        repo: repository.name,
+        issue_number: issue.number,
+        body: `✅ Successfully verified! Project name: ${decrypted}`
+      });
+    } else {
+      await octokit.issues.createComment({
+        owner: repository.owner.login,
+        repo: repository.name,
+        issue_number: issue.number,
+        body: "❌ Verification failed. Unable to decrypt with provided key."
+      });
+    }
+  } catch (error) {
+    console.error("Error handling verification issue:", error.message);
+    await octokit.issues.createComment({
+      owner: repository.owner.login,
+      repo: repository.name,
+      issue_number: issue.number,
+      body: `Error processing verification: ${error.message}`
+    });
   }
 });
 
