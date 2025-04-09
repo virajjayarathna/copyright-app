@@ -22,15 +22,18 @@ const webhooks = new Webhooks({
 // Default copyright text
 const defaultCopyrightText = "© {{YEAR}} Company. All Rights Reserved.";
 
-// Encryption functions adapted from the Python script
+// Encryption functions with deterministic IV
 function generateFernetKey(keyString) {
   const hashedKey = crypto.createHash('sha256').update(keyString).digest();
   return Buffer.from(hashedKey.slice(0, 32)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function encryptProjectName(projectName, key) {
+  // Generate a deterministic IV based on the key and project name
+  const ivSource = key + projectName;
+  const iv = crypto.createHash('md5').update(ivSource).digest().slice(0, 16);
+  
   const fernetKey = generateFernetKey(key);
-  const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(fernetKey, 'base64').slice(0, 32), iv);
   let encrypted = cipher.update(projectName, 'utf8', 'base64');
   encrypted += cipher.final('base64');
@@ -97,8 +100,8 @@ async function getCopyrightText(octokit, repoOwner, repoName, ref) {
 // Updated helper function with hardcoded values
 async function getEncryptionDetailsFromRepo(octokit, repoOwner, repoName, ref) {
   try {
-    const encryptionKey = `qwer1234`;
-    const projectName = `casineo`;
+    const encryptionKey = `z9ogqrey1`;
+    const projectName = `kingit`;
     const encryptedString = encryptProjectName(projectName, encryptionKey);
     const parts = splitStringIntoParts(encryptedString, 5);
     return {
@@ -158,38 +161,6 @@ function addEncryptedComments(content, filePath, parts) {
   }
 
   return newLines.join("\n");
-}
-
-// Example usage (for testing purposes, replace with your actual encryption logic)
-const content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11";
-const filePath = "example.js";
-const parts = ["USp+BYejb", "abc123", "xyz789", "def456", "ghi000"];
-const modifiedContent = addEncryptedComments(content, filePath, parts);
-console.log(modifiedContent);
-
-// Save copyright and encryption info to a file in the repo
-async function saveCopyrightInfo(octokit, repoOwner, repoName, branch, encryptionDetails, commitSha) {
-  try {
-    const infoContent = 
-      `Project Name: ${encryptionDetails.projectName}\n` +
-      `Key: ${encryptionDetails.encryptionKey}\n` +
-      `Full Encrypted: ${encryptionDetails.encryptedString}\n`;
-    const { data: blobData } = await octokit.git.createBlob({
-      owner: repoOwner,
-      repo: repoName,
-      content: infoContent,
-      encoding: "utf-8",
-    });
-    return {
-      path: "copyright_info.txt",
-      mode: "100644",
-      type: "blob",
-      sha: blobData.sha
-    };
-  } catch (error) {
-    console.error("Error saving copyright info:", error.message);
-    return null;
-  }
 }
 
 // Updated push event handler to prevent infinite loops
@@ -324,21 +295,6 @@ app.webhooks.on("push", async ({ payload }) => {
       });
       changesMade = true;
       console.log(`Updated ${filePath} with copyright and encrypted identifiers`);
-    }
-
-    if (encryptionDetails) {
-      const infoFileTree = await saveCopyrightInfo(
-        octokit, 
-        repoOwner, 
-        repoName, 
-        branch, 
-        encryptionDetails, 
-        latestCommitSha
-      );
-      if (infoFileTree) {
-        newTree.push(infoFileTree);
-        changesMade = true;
-      }
     }
 
     if (!changesMade) {
